@@ -51,7 +51,7 @@ Full options, updates and recovery: [docs/INSTALL.md](docs/INSTALL.md).
 <br/>
 
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/24a1baf5-0ff1-4c08-9e29-37781b575b84" alt="PowerShell 7 with oh-my-posh + Nerd Font" width="880"/>
+  <img src="assets/terminal.png" alt="PowerShell 7 with oh-my-posh + Nerd Font" width="880"/>
   <br/>
   <sub><i>PowerShell 7 · oh-my-posh · Nerd Font · Terminal-Icons</i></sub>
 </div>
