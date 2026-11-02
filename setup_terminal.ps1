@@ -1393,7 +1393,7 @@ if (-not `$global:__VortermStarted) {
             $bgPath   = Join-Path $assetDir 'vorterm-bg.png'
             $icoPath  = Join-Path $assetDir 'vorterm-btc.png'
             $assets = @(
-                @{ Path = $bgPath;  Src = $opts.BgSrc; Url = 'https://raw.githubusercontent.com/4leX-42/Vorterm7.0/main/assets/vorterm-bg.png'; Tag = 'fondo' },
+                @{ Path = $bgPath;  Src = $opts.BgSrc; Url = 'https://raw.githubusercontent.com/4leX-42/Vorterm/main/assets/vorterm-bg.png'; Tag = 'fondo' },
                 @{ Path = $icoPath; Src = $null;       Url = 'https://cdn-icons-png.flaticon.com/512/5968/5968260.png';                         Tag = 'icono BTC' }
             )
             foreach ($a in $assets) {

@@ -8,7 +8,7 @@
     files and starts the Vorterm window. Nothing is installed until you press INSTALL.
 
 .EXAMPLE
-    Set-ExecutionPolicy -Scope Process Bypass -Force; [Net.ServicePointManager]::SecurityProtocol=3072; $f="$env:TEMP\vorterm-bootstrap.ps1"; irm https://raw.githubusercontent.com/4leX-42/Vorterm7.0/main/bootstrap.ps1 -OutFile $f; & $f
+    Set-ExecutionPolicy -Scope Process Bypass -Force; [Net.ServicePointManager]::SecurityProtocol=3072; $f="$env:TEMP\vorterm-bootstrap.ps1"; irm https://raw.githubusercontent.com/4leX-42/Vorterm/main/bootstrap.ps1 -OutFile $f; & $f
 
 .NOTES
     Context: user. No admin rights needed. Windows PowerShell 5.1 and PowerShell 7.
@@ -26,7 +26,7 @@ $base = Join-Path $env:LOCALAPPDATA 'Vorterm'
 $app  = Join-Path $base 'app'
 $tmp  = Join-Path $env:TEMP ('vorterm-dl-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $zip  = Join-Path $tmp 'vorterm.zip'
-$url  = "https://github.com/4leX-42/Vorterm7.0/archive/refs/heads/$Branch.zip"
+$url  = "https://github.com/4leX-42/Vorterm/archive/refs/heads/$Branch.zip"
 
 try {
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
