@@ -86,7 +86,7 @@ $xamlText = $text.Substring($x0, $text.IndexOf("'@", $x0) - $x0)
 $ps = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' } else { $null }
 $xamlFile = [IO.Path]::GetTempFileName()
 [IO.File]::WriteAllText($xamlFile, $xamlText)
-$probe = "Add-Type -AssemblyName PresentationFramework; [xml]`$x = [IO.File]::ReadAllText('$xamlFile'); `$w = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader `$x)); foreach (`$n in 'cb_lab','LabPanel','LabPathBox','LabBrowseBtn','LabTarget','cb_node','cb_multipane','cb_restore','SetupPanel','StartupRow','ConfigRow','OptionsBtn') { if (-not `$w.FindName(`$n)) { throw ""missing `$n"" } }; 'XAML_OK'"
+$probe = "Add-Type -AssemblyName PresentationFramework; [xml]`$x = [IO.File]::ReadAllText('$xamlFile'); `$w = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader `$x)); foreach (`$n in 'cb_lab','LabPanel','LabPathBox','LabBrowseBtn','LabTarget','cb_node','cb_multipane','cb_restore','cb_claudecfg','SetupPanel','StartupRow','ConfigRow','OptionsBtn') { if (-not `$w.FindName(`$n)) { throw ""missing `$n"" } }; 'XAML_OK'"
 $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
 $res = if ($ps) { & $ps -NoProfile -STA -EncodedCommand $enc 2>&1 } else { & powershell.exe -NoProfile -STA -EncodedCommand $enc 2>&1 }
 Remove-Item -LiteralPath $xamlFile -Force

@@ -5,7 +5,7 @@
 </td>
 <td valign="middle">
 
-### VORTERM 7.3
+### VORTERM 7.4
 
 **From clean Windows to modern dev shell**
 *one click*
@@ -15,7 +15,7 @@
 ![winget](https://img.shields.io/badge/winget-silent-FCEE0A?logoColor=black)
 ![license](https://img.shields.io/badge/license-MIT-1a1a1a)
 
-[Install](#-install) · [Stack](#-stack) · [Multi-pane](#-multi-pane) · [Session restore](#️-session-restore) · [Lab](#-lab-optional) · [Claude Code](#-claude-code-companion) · [Reset](#-reset)
+[Install](#-install) · [Stack](#-stack) · [Multi-pane](#-multi-pane) · [Session restore](#️-session-restore) · [Claude Code config](#-claude-code-config) · [Lab](#-lab-optional) · [Claude Code](#-claude-code-companion) · [Reset](#-reset)
 
 </td>
 </tr>
@@ -149,6 +149,30 @@ Details: [docs/LAB.md](docs/LAB.md).
 
 ---
 
+## 🤖 Claude Code config
+
+Tick **claude code config** and Vorterm sets up Claude Code completely (it also ticks
+**claude code** and **node.js lts**):
+
+| | |
+| :-- | :-- |
+| Permissions | `bypassPermissions` as the default mode and no start-up warning, in `~\.claude` and `~\.claude2`, enforced again on every install; deny rules for `.env`, SSH keys, certificates and cloud credentials |
+| Plugins | commit-commands, security-guidance, claude-security, feature-dev, pr-review-toolkit, claude-md-management, claude-code-setup, superpowers, frontend-design, session-report |
+| MCP and tools | codebase-memory-mcp (code graph), context7 (library docs), agent-browser, gitleaks |
+| Second profile | `claude2` (second account in `~\.claude2`, same stack) |
+| Status line | 5-hour / weekly usage and context percent, only if you have none |
+| Workspace | `Documents\claude-lab`: `CLAUDE.md` with working rules, `proyectos\_plantilla`, `scripts`, `docs\lecciones`, `privado` and `_archivo` kept out of git. Existing files are never overwritten |
+
+> **Warning:** with `bypassPermissions` Claude runs commands and edits files without asking,
+> including whatever a plugin or a prompt injection hidden in a web page or a repository tells it
+> to do. The deny rules still apply. Untick the option if you want permission prompts; an
+> organisation policy (`disableBypassPermissionsMode`) overrides it.
+
+Plugins and MCP servers come from the [Claude Code Setup Guide](https://github.com/4leX-42/ClaudeCode_SETUP)
+engine (`profiles/essentials.json`). On its own: `claude\Set-VortermClaude.ps1`.
+
+---
+
 ## 🤖 Claude Code companion
 
 **[Claude Code Setup Guide](https://github.com/4leX-42/ClaudeCode_SETUP)** is the
@@ -169,6 +193,7 @@ its own marked block in the profile, outside Vorterm's).
 One click. Removes only what Vorterm added: its profile block (your own lines stay), the
 user copies of its modules, the Mosaic profile and its shortcuts, the session restore
 scripts and hooks, and returns Windows Terminal settings to the state before Vorterm. A `.before-reset-*` copy is kept every time.
+Claude Code config (permissions, plugins, `claude-lab`) is kept.
 Your LAB folder is never touched.
 
 ---

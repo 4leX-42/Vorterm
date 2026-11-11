@@ -1,5 +1,24 @@
 # Changelog
 
+## 7.4 - 2026-11-12
+
+### Added
+- **claude code config** (one option, `-ClaudeConfig` unattended): `bypassPermissions` as the
+  default mode with no start-up warning in `~\.claude` and `~\.claude2`, written before and after
+  everything else on every install; deny rules for secrets; plugins, MCP servers and tools from the
+  Claude Code Setup Guide `essentials` manifest (commit-commands, security-guidance,
+  claude-security, feature-dev, pr-review-toolkit, claude-md-management, claude-code-setup,
+  superpowers, frontend-design, session-report, codebase-memory-mcp, context7, agent-browser,
+  gitleaks); second profile `claude2`; usage status line; a generic `Documents\claude-lab`
+  workspace with a `CLAUDE.md`. The engine runs with a deadline and a stall limit. Ticks
+  **claude code** and **node.js lts**. `claude\Set-VortermClaude.ps1` also runs on its own.
+
+### Changed
+- Options are drawn in the PastDow manner: a hairline ring that fills with a glowing dot when
+  ticked, dim text when not, a line under the option on hover; Reset options in red.
+- EXIT, INSTALL and RESET sit in three equal centred cells, INSTALL in the middle.
+- BROWSE opens the Windows 11 Explorer folder picker instead of the old folder tree.
+
 ## 7.3 - 2026-11-11
 
 ### Added

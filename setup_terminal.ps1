@@ -1,5 +1,5 @@
 # =============================================================
-#  Vorterm 7.3  (WPF GUI)
+#  Vorterm 7.4  (WPF GUI)
 #  Run via INSTALAR.bat (powershell.exe -STA -WindowStyle Hidden)
 #
 #  CLI (sin GUI, desatendido / pruebas):
@@ -12,6 +12,8 @@
 #    -Node / -ClaudeCode / -VSCode : componentes opcionales
 #    -NoMultiPane  : sin m2/m3/m4 ni perfil Mosaic
 #    -NoRestore    : sin session restore (paneles y sesiones de Claude tras reinicio)
+#    -ClaudeConfig : claude code config (bypassPermissions siempre, plugins/MCP essentials,
+#                    barra de estado, segundo perfil, carpeta claude-lab); implica -ClaudeCode -Node
 #    -Reset       : deshace la configuracion Vorterm (perfiles, modulos, WT)
 # =============================================================
 
@@ -27,11 +29,12 @@ param(
     [switch]$VSCode,
     [switch]$NoMultiPane,
     [switch]$NoRestore,
+    [switch]$ClaudeConfig,
     [switch]$Reset,
     [switch]$NoElevate
 )
 
-$script:VortermVersion = '7.3'
+$script:VortermVersion = '7.4'
 
 # ------ PSModulePath de Windows PowerShell ---------------------
 # Lanzado desde pwsh 7 (comando de una linea pegado en pwsh) o con un PSModulePath de
@@ -112,6 +115,62 @@ if (-not ('Vorterm.Dwm' -as [type])) {
     Add-Type -Namespace Vorterm -Name Dwm -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
 public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int value, int size);
+'@
+}
+
+# Folder picker: the Windows 11 Explorer dialog (IFileOpenDialog + FOS_PICKFOLDERS), never the old
+# FolderBrowserDialog tree. Returns $null when cancelled. C# 5 (5.1 compiler).
+if (-not $NoGui -and -not ('Vorterm.FolderPicker' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace Vorterm {
+    public static class FolderPicker {
+        public static string Pick(IntPtr owner, string title, string start) {
+            IFileOpenDialog dlg = (IFileOpenDialog)new FileOpenDialogRCW();
+            try {
+                uint opts; dlg.GetOptions(out opts);
+                dlg.SetOptions(opts | 0x20u | 0x40u | 0x800u);   // PICKFOLDERS | FORCEFILESYSTEM | PATHMUSTEXIST
+                dlg.SetTitle(title);
+                IShellItem item;
+                if (!string.IsNullOrEmpty(start) && System.IO.Directory.Exists(start) &&
+                    SHCreateItemFromParsingName(start, IntPtr.Zero, typeof(IShellItem).GUID, out item) == 0)
+                    dlg.SetFolder(item);
+                if (dlg.Show(owner) != 0) return null;
+                IShellItem res; dlg.GetResult(out res);
+                string path; res.GetDisplayName(0x80058000u, out path);   // SIGDN_FILESYSPATH
+                return path;
+            }
+            catch { return null; }
+            finally { Marshal.ReleaseComObject(dlg); }
+        }
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+        static extern int SHCreateItemFromParsingName(string path, IntPtr pbc, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IShellItem item);
+        [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")] class FileOpenDialogRCW { }
+        [ComImport, Guid("d57c7288-d4ad-4768-be02-9d969532d960"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IFileOpenDialog {
+            [PreserveSig] int Show(IntPtr parent);
+            void SetFileTypes(uint c, IntPtr specs); void SetFileTypeIndex(uint i); void GetFileTypeIndex(out uint i);
+            void Advise(IntPtr sink, out uint cookie); void Unadvise(uint cookie);
+            void SetOptions(uint fos); void GetOptions(out uint fos);
+            void SetDefaultFolder(IShellItem si); void SetFolder(IShellItem si); void GetFolder(out IShellItem si);
+            void GetCurrentSelection(out IShellItem si);
+            void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name); void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+            void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+            void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string text); void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+            void GetResult(out IShellItem si);
+            void AddPlace(IShellItem si, int fdap); void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string ext);
+            void Close(int hr); void SetClientGuid(ref Guid guid); void ClearClientData(); void SetFilter(IntPtr filter);
+            void GetResults(out IntPtr items); void GetSelectedItems(out IntPtr items);
+        }
+        [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IShellItem {
+            void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv); void GetParent(out IShellItem si);
+            void GetDisplayName(uint sigdn, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+            void GetAttributes(uint mask, out uint attrs); void Compare(IShellItem si, uint hint, out int order);
+        }
+    }
+}
 '@
 }
 
@@ -2136,6 +2195,25 @@ if (-not `$global:__VortermStarted) {
         #  - restore\term-restore.ps1      -> lo carga el bloque del perfil (carpeta + claude)
         #  - restore\term-restore-hook.ps1 -> hooks de Claude Code (~\.claude y ~\.claude2)
         # Se copian a %LOCALAPPDATA%\Vorterm\restore. Si el usuario ya tiene su propio
+        # ---- Claude Code config (one switch) --------------
+        # claude\Set-VortermClaude.ps1: bypassPermissions as the default mode, always (written
+        # before and after everything else), deny rules for secrets, the Claude Code Setup Guide
+        # engine with its "essentials" manifest (plugins, MCP servers, tools, second profile
+        # ~/.claude2), status line and a generic claude-lab folder.
+        if ($opts.ClaudeConfig) {
+            Set-Status 'Claude Code config' 89
+            try {
+                if (-not $opts.ClaudeCfgScript -or -not (Test-Path -LiteralPath $opts.ClaudeCfgScript)) {
+                    throw "claude\Set-VortermClaude.ps1 not found next to the installer (download the whole repository)"
+                }
+                Write-Log "  [..] WARNING: bypassPermissions = Claude runs commands and edits files without asking (deny rules for secrets still apply)"
+                $cc = & $opts.ClaudeCfgScript -WorkDir $opts.WorkDir -Pwsh $pwshExe -DryRun:$DRY -PassThru -Log { param($m) Write-Log $m }
+                if (-not $cc.Ok) { $script:failures += @($cc.Failures | ForEach-Object { "claude-config:$_" }) }
+            } catch {
+                Write-Log "  [!!] Claude Code config: $($_.Exception.Message)"
+                $script:failures += 'claude-config'
+            }
+        }
         # term-restore (fuera de Vorterm), no se duplica.
         if ($opts.Restore) {
             Set-Status 'Session restore' 90
@@ -2945,6 +3023,8 @@ if ($PSScriptRoot) { $script:BgSrc = Join-Path $PSScriptRoot 'assets\vorterm-bg.
 if ($PSScriptRoot) { $script:LabScriptPath = Join-Path $PSScriptRoot 'lab\New-VortermLab.ps1' }
 $script:RestoreSrc = $null
 if ($PSScriptRoot) { $script:RestoreSrc = Join-Path $PSScriptRoot 'restore' }
+$script:ClaudeCfgScript = $null
+if ($PSScriptRoot) { $script:ClaudeCfgScript = Join-Path $PSScriptRoot 'claude\Set-VortermClaude.ps1' }
 
 if ($NoGui) {
     $sync = @{
@@ -2986,10 +3066,12 @@ if ($NoGui) {
         SevenZip     = $false
         GitHubDesktop = $false
         WSL          = $false
-        ClaudeCode   = [bool]$ClaudeCode
+        ClaudeCode   = [bool]$ClaudeCode -or [bool]$ClaudeConfig
+        ClaudeConfig = [bool]$ClaudeConfig
+        ClaudeCfgScript = $script:ClaudeCfgScript
         Codex        = $false
         Antigravity  = $false
-        Node         = [bool]$Node
+        Node         = [bool]$Node -or [bool]$ClaudeConfig
         Lab          = [bool]$LabRoot
         LabRoot      = $LabRoot
         LabAdopt     = [bool]$LabAdopt
@@ -3016,7 +3098,7 @@ if ($NoGui) {
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Vorterm 7.3"
+        Title="Vorterm 7.4"
         Height="940" Width="1700"
         MinHeight="560" MinWidth="980"
         WindowStartupLocation="CenterScreen"
@@ -3053,13 +3135,181 @@ if ($NoGui) {
       <Setter Property="Margin" Value="0,10,0,2"/>
     </Style>
 
+    <!-- Options in the PastDow manner: no Windows box. Off = dim text and a hairline ring; on = the
+         text comes up and a glowing yellow dot pops into the ring. Hover draws a hairline under it. -->
     <Style TargetType="CheckBox">
       <Setter Property="Foreground" Value="#e8e8e8"/>
       <Setter Property="FontSize" Value="15"/>
-      <Setter Property="Margin" Value="0,5,12,5"/>
+      <Setter Property="Margin" Value="0,5,16,5"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
       <Setter Property="FontFamily" Value="Bahnschrift Light, Bahnschrift, Segoe UI Light"/>
       <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Grid x:Name="root" Background="Transparent" SnapsToDevicePixels="True">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Grid Width="11" Height="11" VerticalAlignment="Center" Margin="0,1,10,0">
+                <Ellipse x:Name="ring" StrokeThickness="1">
+                  <Ellipse.Stroke><SolidColorBrush Color="#4a4b50"/></Ellipse.Stroke>
+                </Ellipse>
+                <Ellipse x:Name="dot" Margin="2.5" Fill="#fcee0a" Opacity="0" RenderTransformOrigin="0.5,0.5">
+                  <Ellipse.RenderTransform><ScaleTransform ScaleX="0.2" ScaleY="0.2"/></Ellipse.RenderTransform>
+                  <Ellipse.Effect><DropShadowEffect Color="#fcee0a" BlurRadius="9" ShadowDepth="0" Opacity="0.95"/></Ellipse.Effect>
+                </Ellipse>
+              </Grid>
+              <Grid Grid.Column="1">
+                <ContentPresenter x:Name="cp" VerticalAlignment="Center" Opacity="0.5" RecognizesAccessKey="True"/>
+                <Rectangle x:Name="ul" Height="1" VerticalAlignment="Bottom" Margin="0,0,0,-3" Fill="#fcee0a"
+                           Opacity="0.75" RenderTransformOrigin="0,0.5">
+                  <Rectangle.RenderTransform><ScaleTransform ScaleX="0"/></Rectangle.RenderTransform>
+                </Rectangle>
+              </Grid>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Trigger.EnterActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.45">
+                        <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
+                      </DoubleAnimation>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.45">
+                        <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
+                      </DoubleAnimation>
+                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#fcee0a" Duration="0:0:0.3"/>
+                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.3"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.EnterActions>
+                <Trigger.ExitActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.2" Duration="0:0:0.25"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.2" Duration="0:0:0.25"/>
+                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#4a4b50" Duration="0:0:0.3"/>
+                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="0.5" Duration="0:0:0.3"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.ExitActions>
+              </Trigger>
+              <EventTrigger RoutedEvent="MouseEnter">
+                <BeginStoryboard>
+                  <Storyboard>
+                    <DoubleAnimation Storyboard.TargetName="ul" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.4">
+                      <DoubleAnimation.EasingFunction><QuinticEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                    </DoubleAnimation>
+                  </Storyboard>
+                </BeginStoryboard>
+              </EventTrigger>
+              <EventTrigger RoutedEvent="MouseLeave">
+                <BeginStoryboard>
+                  <Storyboard>
+                    <DoubleAnimation Storyboard.TargetName="ul" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0" Duration="0:0:0.3"/>
+                  </Storyboard>
+                </BeginStoryboard>
+              </EventTrigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="root" Property="Opacity" Value="0.35"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Same option, in red: what Reset removes -->
+    <Style x:Key="DangerCheck" TargetType="CheckBox">
+      <Setter Property="Foreground" Value="#e8e8e8"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="Margin" Value="0,5,16,5"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="FontFamily" Value="Bahnschrift Light, Bahnschrift, Segoe UI Light"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Grid x:Name="root" Background="Transparent" SnapsToDevicePixels="True">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Grid Width="11" Height="11" VerticalAlignment="Center" Margin="0,1,10,0">
+                <Ellipse x:Name="ring" StrokeThickness="1">
+                  <Ellipse.Stroke><SolidColorBrush Color="#4a4b50"/></Ellipse.Stroke>
+                </Ellipse>
+                <Ellipse x:Name="dot" Margin="2.5" Fill="#e10024" Opacity="0" RenderTransformOrigin="0.5,0.5">
+                  <Ellipse.RenderTransform><ScaleTransform ScaleX="0.2" ScaleY="0.2"/></Ellipse.RenderTransform>
+                  <Ellipse.Effect><DropShadowEffect Color="#e10024" BlurRadius="9" ShadowDepth="0" Opacity="0.95"/></Ellipse.Effect>
+                </Ellipse>
+              </Grid>
+              <Grid Grid.Column="1">
+                <ContentPresenter x:Name="cp" VerticalAlignment="Center" Opacity="0.5" RecognizesAccessKey="True"/>
+                <Rectangle x:Name="ul" Height="1" VerticalAlignment="Bottom" Margin="0,0,0,-3" Fill="#e10024"
+                           Opacity="0.75" RenderTransformOrigin="0,0.5">
+                  <Rectangle.RenderTransform><ScaleTransform ScaleX="0"/></Rectangle.RenderTransform>
+                </Rectangle>
+              </Grid>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Trigger.EnterActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.45">
+                        <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
+                      </DoubleAnimation>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.45">
+                        <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
+                      </DoubleAnimation>
+                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#e10024" Duration="0:0:0.3"/>
+                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.3"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.EnterActions>
+                <Trigger.ExitActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.2" Duration="0:0:0.25"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.2" Duration="0:0:0.25"/>
+                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#4a4b50" Duration="0:0:0.3"/>
+                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="0.5" Duration="0:0:0.3"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.ExitActions>
+              </Trigger>
+              <EventTrigger RoutedEvent="MouseEnter">
+                <BeginStoryboard>
+                  <Storyboard>
+                    <DoubleAnimation Storyboard.TargetName="ul" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.4">
+                      <DoubleAnimation.EasingFunction><QuinticEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                    </DoubleAnimation>
+                  </Storyboard>
+                </BeginStoryboard>
+              </EventTrigger>
+              <EventTrigger RoutedEvent="MouseLeave">
+                <BeginStoryboard>
+                  <Storyboard>
+                    <DoubleAnimation Storyboard.TargetName="ul" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0" Duration="0:0:0.3"/>
+                  </Storyboard>
+                </BeginStoryboard>
+              </EventTrigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="root" Property="Opacity" Value="0.35"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
 
     <Style TargetType="ToolTip">
@@ -3350,7 +3600,7 @@ if ($NoGui) {
             <DropShadowEffect Color="#fcee0a" BlurRadius="22" ShadowDepth="0" Opacity="0.7"/>
           </TextBlock.Effect>
         </TextBlock>
-        <TextBlock Text="VII.3"
+        <TextBlock Text="VII.4"
                    FontFamily="JetBrains Mono, Cascadia Mono, Consolas"
                    FontSize="12" Foreground="{StaticResource Muted}"
                    HorizontalAlignment="Center" Margin="0,4,0,0"/>
@@ -3401,6 +3651,8 @@ if ($NoGui) {
             <UniformGrid Columns="2">
               <CheckBox x:Name="cb_claude"  Content="claude code"    IsChecked="False"
                         ToolTip="CLI agente de Anthropic (winget Anthropic.ClaudeCode)"/>
+              <CheckBox x:Name="cb_claudecfg" Content="claude code config" IsChecked="False"
+                        ToolTip="permissions.defaultMode=bypassPermissions + skipDangerousModePermissionPrompt (always, ~/.claude and ~/.claude2) + deny rules for secrets | ClaudeCode_SETUP essentials: 10 plugins, codebase-memory-mcp, context7, agent-browser, gitleaks | second profile (claude2) | status line | claude-lab folder. WARNING: Claude runs commands without asking. Ticks claude code and node.js lts."/>
               <CheckBox x:Name="cb_codex"   Content="codex cli"      IsChecked="False"
                         ToolTip="CLI agente de OpenAI (winget OpenAI.Codex)"/>
               <CheckBox x:Name="cb_antigrav" Content="antigravity"   IsChecked="False"
@@ -3438,13 +3690,13 @@ if ($NoGui) {
             <TextBlock Text="III / RESET" Style="{StaticResource RomanLabel}"
                        Foreground="{StaticResource Danger}"/>
             <Border Style="{StaticResource SectionRule}" Background="{StaticResource Danger}"/>
-            <CheckBox x:Name="cb_clean_profile" Content="powershell profiles" IsChecked="True"
+            <CheckBox Style="{StaticResource DangerCheck}" x:Name="cb_clean_profile" Content="powershell profiles" IsChecked="True"
                       ToolTip="Restaura backup Vorterm o mueve el perfil a .before-reset-*&#10;Quita tambien session restore (scripts y hooks de Vorterm en Claude Code)"/>
-            <CheckBox x:Name="cb_clean_history" Content="psreadline history"  IsChecked="False"
+            <CheckBox Style="{StaticResource DangerCheck}" x:Name="cb_clean_history" Content="psreadline history"  IsChecked="False"
                       ToolTip="Borra los ficheros *_history.txt de PSReadLine (sin copia)"/>
-            <CheckBox x:Name="cb_clean_modules" Content="terminal modules"    IsChecked="True"
+            <CheckBox Style="{StaticResource DangerCheck}" x:Name="cb_clean_modules" Content="terminal modules"    IsChecked="True"
                       ToolTip="Quita las copias de usuario de Terminal-Icons, posh-git y PSReadLine + oh-my-posh.&#10;Ningun otro modulo se toca"/>
-            <CheckBox x:Name="cb_clean_wt"      Content="windows terminal"    IsChecked="True"
+            <CheckBox Style="{StaticResource DangerCheck}" x:Name="cb_clean_wt"      Content="windows terminal"    IsChecked="True"
                       ToolTip="Restaura settings.json al estado anterior a Vorterm (copia previa guardada).&#10;Quita el perfil Mosaic y los atajos Vorterm"/>
           </StackPanel>
         </Grid>
@@ -3534,14 +3786,14 @@ if ($NoGui) {
       </Grid>
 
       <!-- ACTIONS -->
-      <StackPanel Grid.Row="5" Orientation="Horizontal"
-                  HorizontalAlignment="Center" Margin="0,16,0,8">
-        <Button x:Name="ExitBtn"    Content="EXIT"    Style="{StaticResource GhostButton}"   Margin="0,0,14,0"/>
-        <Button x:Name="ResetBtn"   Content="RESET"   Style="{StaticResource WarningButton}" Margin="0,0,14,0"
-                ToolTip="Deshace la configuracion Vorterm (con confirmacion)"/>
-        <Button x:Name="InstallBtn" Content="INSTALL" Style="{StaticResource PrimaryButton}"
+      <!-- Three equal cells, centred: EXIT | INSTALL | RESET, same width and gaps on both sides -->
+      <UniformGrid Grid.Row="5" Rows="1" Columns="3" HorizontalAlignment="Center" Margin="0,16,0,8">
+        <Button x:Name="ExitBtn"    Content="EXIT"    Style="{StaticResource GhostButton}"   Margin="7,0" Padding="0,11"/>
+        <Button x:Name="InstallBtn" Content="INSTALL" Style="{StaticResource PrimaryButton}" Margin="7,0" Padding="0,11" MinWidth="150"
                 ToolTip="Instala stack completo: PS7, WT, Git, Nerd Font, oh-my-posh + tema"/>
-      </StackPanel>
+        <Button x:Name="ResetBtn"   Content="RESET"   Style="{StaticResource WarningButton}" Margin="7,0" Padding="0,11"
+                ToolTip="Deshace la configuracion Vorterm (con confirmacion)"/>
+      </UniformGrid>
     </Grid>
     </ScrollViewer>
   </Grid>
@@ -3591,7 +3843,7 @@ $controls = @{}
 foreach ($n in 'PathBox','BrowseBtn','LogBox','Progress','StatusText','ExitBtn','ResetBtn','InstallBtn','PauseBtn',
                'PathsPanel','RootScroll','RootGrid',
                'cb_vscode','cb_neovim','cb_7zip','cb_github','cb_wsl',
-               'cb_claude','cb_codex','cb_antigrav','cb_node','cb_multipane','cb_restore','cb_lab',
+               'cb_claude','cb_claudecfg','cb_codex','cb_antigrav','cb_node','cb_multipane','cb_restore','cb_lab',
                'SetupPanel','LabPanel','LabPathBox','LabBrowseBtn','LabTarget',
                'StartupRow','ConfigRow','OptionsBtn',
                'cb_clean_profile','cb_clean_wt','cb_clean_modules','cb_clean_history') {
@@ -3812,14 +4064,13 @@ Add-PathRow 'OMP active theme'   (Join-Path $env:USERPROFILE ".poshthemes\$($scr
 
 $controls.PathBox.Text = $docsRoot
 
+function Select-VortermFolder([string]$Title, [string]$Start) {
+    $owner = (New-Object System.Windows.Interop.WindowInteropHelper $window).Handle
+    return [Vorterm.FolderPicker]::Pick($owner, $Title, $Start)
+}
 $controls.BrowseBtn.Add_Click({
-    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description         = 'Select startup directory'
-    $dlg.SelectedPath        = $controls.PathBox.Text
-    $dlg.ShowNewFolderButton = $true
-    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        $controls.PathBox.Text = $dlg.SelectedPath
-    }
+    $p = Select-VortermFolder 'Startup directory' $controls.PathBox.Text.Trim().Trim('"')
+    if ($p) { $controls.PathBox.Text = $p }
 })
 
 # ------ LAB (opcional) -------------------------------------
@@ -3831,15 +4082,12 @@ $controls.LabPathBox.Text = $docsRoot
 Update-LabTarget
 $controls.LabPathBox.Add_TextChanged({ Update-LabTarget })
 $controls.cb_lab.Add_Checked({   $controls.LabPanel.Visibility = [System.Windows.Visibility]::Visible })
+# claude code config needs Claude Code itself and Node.js (MCP servers): tick them along.
+$controls.cb_claudecfg.Add_Checked({ $controls.cb_claude.IsChecked = $true; $controls.cb_node.IsChecked = $true })
 $controls.cb_lab.Add_Unchecked({ $controls.LabPanel.Visibility = [System.Windows.Visibility]::Collapsed })
 $controls.LabBrowseBtn.Add_Click({
-    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description         = 'Carpeta donde se creara LAB'
-    $dlg.SelectedPath        = $controls.LabPathBox.Text.Trim().Trim('"')
-    $dlg.ShowNewFolderButton = $true
-    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        $controls.LabPathBox.Text = $dlg.SelectedPath
-    }
+    $p = Select-VortermFolder 'Folder where LAB will be created' $controls.LabPathBox.Text.Trim().Trim('"')
+    if ($p) { $controls.LabPathBox.Text = $p }
 })
 
 $controls.ExitBtn.Add_Click({ $window.Close() })
@@ -3981,6 +4229,8 @@ $controls.InstallBtn.Add_Click({
         GitHubDesktop = $controls.cb_github.IsChecked
         WSL          = $controls.cb_wsl.IsChecked
         ClaudeCode   = $controls.cb_claude.IsChecked
+        ClaudeConfig = [bool]$controls.cb_claudecfg.IsChecked
+        ClaudeCfgScript = $script:ClaudeCfgScript
         Codex        = $controls.cb_codex.IsChecked
         Antigravity  = $controls.cb_antigrav.IsChecked
         Node         = $controls.cb_node.IsChecked
