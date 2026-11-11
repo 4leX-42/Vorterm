@@ -39,7 +39,8 @@ Manual alternative:
 | PowerShell Gallery | NuGet provider, PSGallery trusted, Terminal-Icons, posh-git, PSReadLine (only if older than 2.3.6) | Reset (modules) |
 | Profiles | One managed block in the PowerShell 7 and 5.1 profiles; everything else in the file is kept | Reset (profiles) |
 | Theme | `~\.poshthemes\Mainthema.json`, `POSH_THEMES_PATH` | delete the folder / variable |
-| Windows Terminal | Font and look of the PowerShell 7 profile (background and icon only if it has none), default profile, hidden "Vorterm Mosaic" profile, three shortcuts only if those keys are free | Reset (Windows Terminal) |
+| Windows Terminal | Font and look of the PowerShell 7 profile (background and icon only if it has none), default profile, hidden "Vorterm Mosaic" profile, three shortcuts only if those keys are free. Session restore: `firstWindowPreference` (persisted layout) and `windowingBehavior: useAnyExisting`, only while they are at their defaults | Reset (Windows Terminal) |
+| Session restore | `%LOCALAPPDATA%\Vorterm\restore` (two scripts) and three hooks in `~\.claude\settings.json` and `~\.claude2\settings.json` when those files exist. Skipped when you already load your own `term-restore.ps1` | Reset (profiles) |
 | LAB (optional) | `<folder>\LAB` | delete the folder; Reset never touches it |
 
 Backups: the first time Vorterm changes a profile or `settings.json` it saves
@@ -60,6 +61,7 @@ powershell -ExecutionPolicy Bypass -STA -File .\setup_terminal.ps1 -NoGui [optio
 | `-ClaudeCode` | Install Claude Code (winget) |
 | `-VSCode` | Install Visual Studio Code |
 | `-NoMultiPane` | Skip m2/m3/m4, the Mosaic profile and its shortcuts |
+| `-NoRestore` | Skip session restore (panes and Claude Code sessions coming back after a reboot) |
 | `-LabRoot <path>` | Create the LAB in `<path>\LAB` |
 | `-LabAdopt` | Use an existing `LAB` folder that Vorterm did not create (adds missing files only) |
 | `-Reset` | Undo the Vorterm configuration (profiles, modules, Windows Terminal) |

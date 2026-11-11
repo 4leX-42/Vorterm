@@ -1,5 +1,32 @@
 # Changelog
 
+## 7.3 - 2026-11-11
+
+### Added
+- **Session restore** (on by default, `-NoRestore` to skip): after a reboot, crash or forced
+  close, Windows Terminal reopens its panes, each goes back to its folder and resumes the
+  Claude Code session it had (`~\.claude` and `~\.claude2`). Scripts in `restore\`, copied to
+  `%LOCALAPPDATA%\Vorterm\restore`; Claude Code hooks SessionStart / UserPromptSubmit /
+  SessionEnd only in profiles that already exist; Windows Terminal `firstWindowPreference`
+  (persistedLayoutAndContent on 1.25+, persistedWindowLayout before) and
+  `windowingBehavior: useAnyExisting`, only while at their defaults. A user's own
+  `term-restore.ps1` or hooks are detected and left alone.
+- **Motion** in the window, in the style of PastDow: sections rise in on open, a light runs
+  along the progress hairline while something works, the status breathes, the bar glows once
+  on finish, the finish dialog fades in, and the window minimises into its taskbar button
+  and pours back out (genie). Off when Windows animations are off or `VORTERM_NO_MOTION=1`.
+
+### Changed
+- `m2 -Claude` panes brought back by session restore resume their session instead of
+  starting a new Claude.
+- Reset also removes the session restore scripts and Vorterm's Claude Code hooks.
+- `tests/Test-VortermStatic.ps1`: gitleaks output no longer stops the run on PowerShell 5.1.
+
+### Fixed
+- Install hung forever without Internet (no DNS, proxy): when the NuGet provider cannot be
+  installed, PowerShell asked "install NuGet? [Y/N]" with nobody to answer. Now PowerShell
+  Gallery modules are skipped with a warning and the install goes on.
+
 ## 7.2 - 2026-10-17
 
 ### Added

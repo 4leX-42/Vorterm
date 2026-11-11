@@ -86,7 +86,7 @@ $xamlText = $text.Substring($x0, $text.IndexOf("'@", $x0) - $x0)
 $ps = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' } else { $null }
 $xamlFile = [IO.Path]::GetTempFileName()
 [IO.File]::WriteAllText($xamlFile, $xamlText)
-$probe = "Add-Type -AssemblyName PresentationFramework; [xml]`$x = [IO.File]::ReadAllText('$xamlFile'); `$w = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader `$x)); foreach (`$n in 'cb_lab','LabPanel','LabPathBox','LabBrowseBtn','LabTarget','cb_node','cb_multipane','SetupPanel','StartupRow','ConfigRow','OptionsBtn') { if (-not `$w.FindName(`$n)) { throw ""missing `$n"" } }; 'XAML_OK'"
+$probe = "Add-Type -AssemblyName PresentationFramework; [xml]`$x = [IO.File]::ReadAllText('$xamlFile'); `$w = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader `$x)); foreach (`$n in 'cb_lab','LabPanel','LabPathBox','LabBrowseBtn','LabTarget','cb_node','cb_multipane','cb_restore','SetupPanel','StartupRow','ConfigRow','OptionsBtn') { if (-not `$w.FindName(`$n)) { throw ""missing `$n"" } }; 'XAML_OK'"
 $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
 $res = if ($ps) { & $ps -NoProfile -STA -EncodedCommand $enc 2>&1 } else { & powershell.exe -NoProfile -STA -EncodedCommand $enc 2>&1 }
 Remove-Item -LiteralPath $xamlFile -Force
@@ -94,7 +94,10 @@ Report (($res | Out-String) -match 'XAML_OK') 'XAML loads and has the LAB / node
 
 $gl = Get-Command gitleaks -ErrorAction SilentlyContinue
 if ($gl) {
+    # gitleaks logs to stderr: on Windows PowerShell 5.1 that is an error record, fatal under Stop.
+    $ErrorActionPreference = 'Continue'
     $null = & $gl.Source dir $repo --no-banner --redact 2>&1
+    $ErrorActionPreference = 'Stop'
     Report ($LASTEXITCODE -eq 0) 'gitleaks: no secrets found'
 } else {
     Write-Host '[SKIP] gitleaks not installed'
