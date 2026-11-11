@@ -1,5 +1,5 @@
 # =============================================================
-#  Vorterm 7.2  (WPF GUI)
+#  Vorterm 7.3  (WPF GUI)
 #  Run via INSTALAR.bat (powershell.exe -STA -WindowStyle Hidden)
 #
 #  CLI (sin GUI, desatendido / pruebas):
@@ -11,7 +11,8 @@
 #    -LabAdopt     : usa una carpeta LAB existente no creada por Vorterm
 #    -Node / -ClaudeCode / -VSCode : componentes opcionales
 #    -NoMultiPane  : sin m2/m3/m4 ni perfil Mosaic
-#    -Reset        : deshace la configuracion Vorterm (perfiles, modulos, WT)
+#    -NoRestore    : sin session restore (paneles y sesiones de Claude tras reinicio)
+#    -Reset       : deshace la configuracion Vorterm (perfiles, modulos, WT)
 # =============================================================
 
 [CmdletBinding()]
@@ -25,11 +26,12 @@ param(
     [switch]$ClaudeCode,
     [switch]$VSCode,
     [switch]$NoMultiPane,
+    [switch]$NoRestore,
     [switch]$Reset,
     [switch]$NoElevate
 )
 
-$script:VortermVersion = '7.2'
+$script:VortermVersion = '7.3'
 
 # ------ PSModulePath de Windows PowerShell ---------------------
 # Lanzado desde pwsh 7 (comando de una linea pegado en pwsh) o con un PSModulePath de
@@ -111,6 +113,349 @@ if (-not ('Vorterm.Dwm' -as [type])) {
 [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
 public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int value, int size);
 '@
+}
+
+# Genie (motion, from PastDow): the window narrows into its taskbar button when minimised and
+# pours back out when restored. Drawn on a click-through layered window above everything, row by
+# row from a snapshot of the real window, paced by DwmFlush (monitor refresh rate). Hooked to the
+# WPF window by its HWND (NativeWindow). Any failure falls back to a plain minimise/restore.
+# C# 5 only (Windows PowerShell 5.1 compiler). VORTERM_GENIE_SLOW=1 plays it 6x slower.
+if (-not $NoGui -and -not ('Vorterm.Genie' -as [type])) {
+    try {
+        Add-Type -AssemblyName System.Drawing, UIAutomationClient, UIAutomationTypes
+        $genieRefs = @('System.Drawing', 'System.Windows.Forms',
+                       [System.Windows.Automation.AutomationElement].Assembly.Location,
+                       [System.Windows.Automation.ControlType].Assembly.Location,
+                       [System.Windows.Rect].Assembly.Location)   # WindowsBase: BoundingRectangle is a System.Windows.Rect
+        Add-Type -ReferencedAssemblies $genieRefs -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Windows.Automation;
+using System.Windows.Forms;
+
+namespace Vorterm
+{
+    public sealed class Genie : NativeWindow
+    {
+        public static double Duration = Environment.GetEnvironmentVariable("VORTERM_GENIE_SLOW") == "1" ? 2.2 : 0.36;
+        public bool Enabled = true;
+        readonly string appName;
+        Point? target;
+        Bitmap lastSnap;
+        bool animating;
+
+        Genie(string appName) { this.appName = appName; }
+
+        public static Genie Attach(IntPtr hwnd, string appName)
+        {
+            var g = new Genie(appName);
+            g.AssignHandle(hwnd);
+            int on = 1;
+            DwmSetWindowAttribute(hwnd, 3, ref on, 4);   // DWMWA_TRANSITIONS_FORCEDISABLED: no system minimise animation
+            g.LocateTarget();
+            return g;
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_SYSCOMMAND = 0x112, SC_MINIMIZE = 0xF020, SC_RESTORE = 0xF120;
+            if (Enabled && !animating && m.Msg == WM_SYSCOMMAND)
+            {
+                int cmd = m.WParam.ToInt32() & 0xFFF0;
+                if (cmd == SC_MINIMIZE && !IsIconic(Handle)) { Minimize(ref m); return; }
+                if (cmd == SC_RESTORE && IsIconic(Handle)) { Restore(ref m); return; }
+            }
+            base.WndProc(ref m);
+        }
+
+        void Minimize(ref Message m)
+        {
+            animating = true;
+            try
+            {
+                Rectangle win = Frame();
+                Bitmap snap = Snapshot(win);
+                LocateTarget();
+                if (snap != null) { Play(snap, win, true, delegate { Cloak(true); }); Remember(snap); }
+                base.WndProc(ref m);
+            }
+            finally { Cloak(false); animating = false; }
+        }
+
+        void Restore(ref Message m)
+        {
+            animating = true;
+            try
+            {
+                Cloak(true);
+                base.WndProc(ref m);
+                Rectangle win = Frame();
+                if (lastSnap != null && lastSnap.Width == win.Width && lastSnap.Height == win.Height)
+                    Play(lastSnap, win, false, delegate { Cloak(false); });
+            }
+            finally { Cloak(false); animating = false; }
+        }
+
+        void Remember(Bitmap b) { var old = lastSnap; lastSnap = b; if (old != null && old != b) old.Dispose(); }
+        void Cloak(bool on) { int v = on ? 1 : 0; DwmSetWindowAttribute(Handle, 13, ref v, 4); }
+
+        // Visible frame (no invisible resize borders, no offscreen part of a maximised window)
+        Rectangle Frame()
+        {
+            RECT r;
+            if (DwmGetWindowAttribute(Handle, 9, out r, Marshal.SizeOf(typeof(RECT))) != 0) GetWindowRect(Handle, out r);
+            return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+        }
+
+        Bitmap Snapshot(Rectangle frame)
+        {
+            try
+            {
+                RECT wr; GetWindowRect(Handle, out wr);
+                int ww = wr.Right - wr.Left, wh = wr.Bottom - wr.Top;
+                if (ww <= 0 || wh <= 0 || frame.Width <= 0 || frame.Height <= 0) return null;
+                using (var full = new Bitmap(ww, wh, PixelFormat.Format32bppArgb))
+                {
+                    using (var g = Graphics.FromImage(full))
+                    {
+                        IntPtr dc = g.GetHdc();
+                        try { PrintWindow(Handle, dc, 2); } finally { g.ReleaseHdc(dc); }   // PW_RENDERFULLCONTENT
+                    }
+                    var crop = new Rectangle(frame.Left - wr.Left, frame.Top - wr.Top, frame.Width, frame.Height);
+                    crop.Intersect(new Rectangle(0, 0, ww, wh));
+                    var b = full.Clone(crop, PixelFormat.Format32bppArgb);
+                    // GDI leaves alpha at 0: make every pixel opaque before cutting the corners
+                    var data = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+                    var px = new byte[data.Stride * data.Height];
+                    Marshal.Copy(data.Scan0, px, 0, px.Length);
+                    for (int i = 3; i < px.Length; i += 4) px[i] = 255;
+                    Marshal.Copy(px, 0, data.Scan0, px.Length);
+                    b.UnlockBits(data);
+                    if (!IsZoomed(Handle)) RoundCorners(b, 8);
+                    return b;
+                }
+            }
+            catch { return null; }
+        }
+
+        // Taskbar button of this app (UI Automation), else the middle of the taskbar.
+        void LocateTarget()
+        {
+            if (target == null) target = Fallback();
+            string name = appName;
+            Task.Run(() =>
+            {
+                try
+                {
+                    IntPtr tray = FindWindow("Shell_TrayWnd", null);
+                    if (tray == IntPtr.Zero) return;
+                    var root = AutomationElement.FromHandle(tray);
+                    var buttons = root.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+                    foreach (AutomationElement b in buttons)
+                    {
+                        string n = b.Current.Name ?? "";
+                        if (!n.StartsWith(name, StringComparison.OrdinalIgnoreCase)) continue;
+                        var r = b.Current.BoundingRectangle;
+                        if (r.Width > 0) { target = new Point((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)); return; }
+                    }
+                }
+                catch { }
+            });
+        }
+
+        Point Fallback()
+        {
+            var s = Screen.FromHandle(Handle);
+            var b = s.Bounds; var w = s.WorkingArea;
+            if (w.Bottom < b.Bottom) return new Point(b.Left + b.Width / 2, (w.Bottom + b.Bottom) / 2);
+            if (w.Top > b.Top) return new Point(b.Left + b.Width / 2, (b.Top + w.Top) / 2);
+            return new Point(b.Left + b.Width / 2, b.Bottom - 4);
+        }
+
+        // handoff swaps the real window for the overlay with no gap: closing -> once the overlay shows the
+        // first frame (hide the window then); opening -> on the last frame (show the window).
+        void Play(Bitmap snap, Rectangle win, bool closing, Action handoff)
+        {
+            bool handed = false;
+            try { PlayCore(snap, win, closing, delegate { handed = true; handoff(); }); }
+            catch { }
+            if (!handed) handoff();
+        }
+
+        void PlayCore(Bitmap snap, Rectangle win, bool closing, Action handoff)
+        {
+            Point t = target ?? new Point(win.Left + win.Width / 2, Screen.PrimaryScreen.Bounds.Bottom);
+            int pad = 30;
+            var area = Rectangle.Union(win, new Rectangle(t.X - pad, t.Y - pad, pad * 2, pad * 2));
+            int aw = area.Width, ah = area.Height, sw = snap.Width, sh = snap.Height;
+
+            var src = new int[sw * sh];
+            var sd = snap.LockBits(new Rectangle(0, 0, sw, sh), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+            for (int y = 0; y < sh; y++) Marshal.Copy(sd.Scan0 + y * sd.Stride, src, y * sw, sw);
+            snap.UnlockBits(sd);
+            var dst = new int[aw * ah];
+
+            IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen), bits;
+            var bmi = new BITMAPINFOHEADER { biSize = 40, biWidth = aw, biHeight = -ah, biPlanes = 1, biBitCount = 32 };
+            IntPtr dib = CreateDIBSection(screen, ref bmi, 0, out bits, IntPtr.Zero, 0);
+            IntPtr old = SelectObject(mem, dib);
+            try
+            {
+                using (var ov = new Overlay(area))
+                {
+                    IntPtr h = ov.Handle;   // create the window without showing it
+                    DrawFrame(ov, src, sw, sh, dst, aw, ah, win, t, area.Location, closing ? 0 : 1, screen, mem, bits);
+                    ov.Show();
+                    DwmFlush();
+                    if (closing) { handoff(); DwmFlush(); }
+                    var clock = Stopwatch.StartNew();
+                    while (true)
+                    {
+                        double p = Math.Min(1, clock.Elapsed.TotalSeconds / Duration);
+                        DrawFrame(ov, src, sw, sh, dst, aw, ah, win, t, area.Location, closing ? p : 1 - p, screen, mem, bits);
+                        if (p >= 1) break;
+                        DwmFlush();   // wait for the next vblank
+                    }
+                    if (!closing) { handoff(); DwmFlush(); DwmFlush(); }
+                }
+            }
+            finally
+            {
+                SelectObject(mem, old); DeleteObject(dib); DeleteDC(mem); ReleaseDC(IntPtr.Zero, screen);
+            }
+        }
+
+        static void DrawFrame(Overlay ov, int[] src, int sw, int sh, int[] dst, int aw, int ah, Rectangle win, Point t, Point o,
+                              double k, IntPtr screen, IntPtr mem, IntPtr bits)
+        {
+            Array.Clear(dst, 0, dst.Length);
+            Render(src, sw, sh, dst, aw, ah, win, t, o, k);
+            Marshal.Copy(dst, 0, bits, dst.Length);
+            ov.Push(screen, mem, aw, ah, (byte)(255 * (1 - Math.Pow(k, 8))));
+        }
+
+        // k = 0: the window as it is; k = 1: gone into the button. The edge nearest the button pinches in
+        // along an S-curve while the body slides towards it.
+        static void Render(int[] src, int sw, int sh, int[] dst, int aw, int ah, Rectangle win, Point t, Point o, double k)
+        {
+            double pinch = Ease(Math.Min(1, k / 0.5));
+            double slide = Ease(Math.Max(0, (k - 0.18) / 0.82));
+            bool down = t.Y >= win.Top + win.Height / 2;
+            double top, bottom;
+            if (down) { top = Lerp(win.Top, t.Y, slide); bottom = Lerp(win.Bottom, t.Y, Math.Max(slide, pinch * 0.12)); }
+            else { top = Lerp(win.Top, t.Y, Math.Max(slide, pinch * 0.12)); bottom = Lerp(win.Bottom, t.Y, slide); }
+            double span = bottom - top;
+            if (span < 1) return;
+            double tipHalf = 16;
+            double reach = down ? Math.Max(1, t.Y - win.Top) : Math.Max(1, win.Bottom - t.Y);
+            int y0 = Math.Max(0, (int)Math.Floor(top) - o.Y), y1 = Math.Min(ah, (int)Math.Ceiling(bottom) - o.Y);
+            for (int dy = y0; dy < y1; dy++)
+            {
+                double y = dy + o.Y + 0.5;
+                double v = (y - top) / span;
+                if (v < 0 || v >= 1) continue;
+                double d = down ? (y - win.Top) / reach : (win.Bottom - y) / reach;
+                double c = Smooth(Math.Max(0, Math.Min(1, d))) * pinch;
+                double l = Lerp(win.Left, t.X - tipHalf, c) - o.X, r = Lerp(win.Right, t.X + tipHalf, c) - o.X;
+                int li = Math.Max(0, (int)l), ri = Math.Min(aw, (int)Math.Ceiling(r));
+                if (ri <= li) continue;
+                int srow = (int)(v * sh) * sw, drow = dy * aw;
+                long step = (long)(sw * 65536.0 / Math.Max(1, r - l)), acc = (long)((li - l) * step);
+                for (int x = li; x < ri; x++, acc += step)
+                {
+                    int sx = (int)(acc >> 16);
+                    if (sx < 0) sx = 0; else if (sx >= sw) sx = sw - 1;
+                    dst[drow + x] = src[srow + sx];
+                }
+            }
+        }
+
+        static double Lerp(double a, double b, double t) { return a + (b - a) * t; }
+        static double Smooth(double x) { return x * x * (3 - 2 * x); }
+        static double Ease(double x) { return x < 0.5 ? 4 * x * x * x : 1 - Math.Pow(-2 * x + 2, 3) / 2; }
+
+        static void RoundCorners(Bitmap b, int r)
+        {
+            for (int y = 0; y < r; y++)
+                for (int x = 0; x < r; x++)
+                {
+                    double dx = r - x - 0.5, dy = r - y - 0.5;
+                    if (dx * dx + dy * dy <= r * r) continue;
+                    b.SetPixel(x, y, Color.Transparent); b.SetPixel(b.Width - 1 - x, y, Color.Transparent);
+                    b.SetPixel(x, b.Height - 1 - y, Color.Transparent); b.SetPixel(b.Width - 1 - x, b.Height - 1 - y, Color.Transparent);
+                }
+        }
+
+        // Click-through, non-activating, topmost layered window.
+        sealed class Overlay : Form
+        {
+            readonly Rectangle area;
+            public Overlay(Rectangle area)
+            {
+                this.area = area;
+                FormBorderStyle = FormBorderStyle.None;
+                ShowInTaskbar = false;
+                StartPosition = FormStartPosition.Manual;
+                Bounds = area;
+                TopMost = true;
+            }
+            protected override bool ShowWithoutActivation { get { return true; } }
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    var cp = base.CreateParams;
+                    cp.ExStyle |= 0x80000 | 0x20 | 0x80 | 0x08000000 | 0x8; // LAYERED | TRANSPARENT | TOOLWINDOW | NOACTIVATE | TOPMOST
+                    return cp;
+                }
+            }
+            public void Push(IntPtr screen, IntPtr mem, int w, int h, byte alpha)
+            {
+                var size = new SIZE { cx = w, cy = h };
+                var src = new POINT();
+                var pos = new POINT { x = area.Left, y = area.Top };
+                var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = alpha, AlphaFormat = 1 };
+                UpdateLayeredWindow(Handle, screen, ref pos, ref size, mem, ref src, 0, ref blend, 2);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct BITMAPINFOHEADER
+        {
+            public int biSize, biWidth, biHeight; public short biPlanes, biBitCount;
+            public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
+        [StructLayout(LayoutKind.Sequential)] struct SIZE { public int cx, cy; }
+        [StructLayout(LayoutKind.Sequential, Pack = 1)] struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
+
+        [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
+        [DllImport("dwmapi.dll")] static extern int DwmFlush();
+        [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int v, int size);
+        [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT v, int size);
+        [DllImport("user32.dll")] static extern bool UpdateLayeredWindow(IntPtr h, IntPtr dst, ref POINT pos, ref SIZE size, IntPtr src, ref POINT srcPos, int key, ref BLENDFUNCTION blend, int flags);
+        [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+        [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+        [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+        [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+        [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
+        [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
+        [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+        [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+        [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string name);
+    }
+}
+'@
+    } catch {
+        # Without the genie the window just minimises and restores as usual.
+    }
 }
 
 # ------ Prompt theme (Mainthema) -----------------------------
@@ -337,6 +682,10 @@ $InstallLogic = {
 
         # ---- PSGallery prep ------------------------------
         Set-Status 'PSGallery' 12
+        # Without the NuGet provider, Set-PSRepository / Save-Module on 5.1 ask
+        # "install NuGet? [Y/N]" and wait forever (offline, proxy, DNS down).
+        # $galleryOk = $false skips them instead.
+        $galleryOk = $true
         try {
             [Net.ServicePointManager]::SecurityProtocol =
                 [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -346,12 +695,22 @@ $InstallLogic = {
                 if ($DRY) {
                     Write-Log "  [DRY] instalaria NuGet provider >= 2.8.5.201"
                 } else {
-                    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
-                    Write-Log "  [OK] NuGet provider installed"
+                    try {
+                        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -ErrorAction Stop | Out-Null
+                    } catch {}
+                    if (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue |
+                        Where-Object Version -ge '2.8.5.201') {
+                        Write-Log "  [OK] NuGet provider installed"
+                    } else {
+                        $galleryOk = $false
+                        Write-Log "  [!!] NuGet provider could not be installed (no Internet / proxy?): PowerShell Gallery modules skipped"
+                    }
                 }
             } else { Write-Log "  [OK] NuGet provider" }
 
-            if ((Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue).InstallationPolicy -ne 'Trusted') {
+            if (-not $galleryOk) {
+                # nothing else: trusting PSGallery would prompt for NuGet
+            } elseif ((Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue).InstallationPolicy -ne 'Trusted') {
                 if ($DRY) {
                     Write-Log "  [DRY] PSGallery -> Trusted"
                 } else {
@@ -807,6 +1166,10 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
                     Write-Log "  [DRY] Save-Module $Name $Version -> $ps7Mod"
                     return
                 }
+                if (-not $galleryOk) {
+                    Write-Log "  [!!] $Name skipped: PowerShell Gallery not available"
+                    return
+                }
                 if (-not (Test-Path $ps7Mod)) { New-Item -ItemType Directory -Path $ps7Mod -Force | Out-Null }
                 if ((Test-Path $modDir) -and -not $have) {
                     Write-Log "  [..] $Name dir empty/corrupt, re-installing"
@@ -817,7 +1180,7 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
                 $verArg = if ($Version) { "-RequiredVersion '$Version'" } else { '' }
                 $cmd = "Save-Module -Name '$Name' -Path '$ps7Mod' -Force -ErrorAction Stop $verArg"
                 if ($pwshExe) {
-                    $out = & $pwshExe -NoProfile -Command $cmd 2>&1 | Out-String
+                    $out = & $pwshExe -NoProfile -NonInteractive -Command $cmd 2>&1 | Out-String
                     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
                         throw "pwsh Save-Module failed: $out"
                     }
@@ -1024,6 +1387,29 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
             $escapedPath  = $opts.WorkDir -replace "'", "''"
             $themeLeaf    = $opts.ThemeFile
 
+            # Session restore: se carga al final (envuelve el prompt ya definido) y decide la
+            # carpeta inicial. Si el perfil del usuario ya carga su propio term-restore.ps1
+            # fuera del bloque, Vorterm no lo duplica.
+            $restoreBlock = ''
+            if ($opts.Restore) {
+                $ownTr = $false
+                if (Test-Path -LiteralPath $ps7Path) {
+                    $pt = [System.IO.File]::ReadAllText($ps7Path)
+                    $bi = $pt.IndexOf('# >>> vorterm >>>'); $ei = $pt.IndexOf('# <<< vorterm <<<')
+                    if ($bi -ge 0 -and $ei -gt $bi) { $pt = $pt.Substring(0, $bi) + $pt.Substring($ei + 17) }
+                    $ownTr = $pt -match 'term-restore\.ps1'
+                }
+                if ($ownTr) {
+                    Write-Log "  [..] el perfil ya carga su propio term-restore.ps1: el bloque Vorterm no lo repite"
+                } else {
+                    $restoreBlock = @'
+# --- Session restore: each pane returns to its folder and resumes its Claude session -
+$_trScript = Join-Path $env:LOCALAPPDATA 'Vorterm\restore\term-restore.ps1'
+if (Test-Path $_trScript) { . $_trScript }
+'@
+                }
+            }
+
             # Multi-pane: ventanas de Windows Terminal con 2/3/4 paneles del perfil
             # oculto "Vorterm Mosaic" (negro puro, sin imagen de fondo). Cada panel
             # registra su PID para que "close N" cierre un panel concreto.
@@ -1059,7 +1445,8 @@ function Initialize-VortermPane {
     param([string]$Group, [int]$Index, [switch]$Claude)
     $env:VORTERM_MGROUP = $Group; $env:VORTERM_MPANE = $Index
     Set-Content -Path (Join-Path $env:TEMP "vorterm-mpane\$Group-$Index") -Value $PID
-    if ($Claude) {
+    # A pane brought back by session restore already resumes its own Claude session.
+    if ($Claude -and -not $global:TrRestored) {
         if (Get-Command claude -ErrorAction SilentlyContinue) { claude } else { Write-Warning 'claude not found in PATH' }
     }
 }
@@ -1317,9 +1704,13 @@ if (-not `$script:_ompActive) {
     }
 }
 
+$restoreBlock
+
 # --- Initial directory ----------------------------------------
 if (-not `$global:__VortermStarted) {
-    Set-Location '$escapedPath'
+    `$_restored = `$false
+    if (Get-Command Restore-TrSession -ErrorAction SilentlyContinue) { `$_restored = Restore-TrSession }
+    if (-not `$_restored) { Set-Location '$escapedPath' }
     `$global:__VortermStarted = `$true
     if (-not [Console]::IsOutputRedirected) { Clear-Host }
 }
@@ -1497,6 +1888,7 @@ if (-not `$global:__VortermStarted) {
                             Write-Log "  [DRY]   font -> '$nerdFontFace', defaultProfile -> PS7, startingDirectory -> $($opts.WorkDir)"
                             if ($opts.MultiPane) { Write-Log "  [DRY]   perfil oculto 'Vorterm Mosaic' + atajos Ctrl+Shift+3/B/Z (si estan libres)" }
                             if ($opts.Elevate) { Write-Log "  [DRY]   elevate -> true (UAC por pestana)" }
+                            if ($opts.Restore) { Write-Log "  [DRY]   firstWindowPreference -> persisted*, windowingBehavior -> useAnyExisting (si estan por defecto)" }
                             continue
                         }
 
@@ -1687,6 +2079,40 @@ if (-not `$global:__VortermStarted) {
                             }
                         }
 
+                        # --- Session restore: ventanas que vuelven tras reinicio/cierre ---
+                        # firstWindowPreference: persistedLayoutAndContent solo existe desde WT 1.25
+                        # (las versiones anteriores lo rechazan y cargan valores por defecto); antes,
+                        # persistedWindowLayout. windowingBehavior useAnyExisting: abrir WT con una
+                        # ventana abierta anade una pestana ahi en vez de otra ventana. Solo se
+                        # cambia el valor por defecto: una eleccion propia del usuario se respeta.
+                        if ($opts.Restore) {
+                            $pref = 'persistedWindowLayout'
+                            $pkg = $null
+                            if ($wtJson -like '*Microsoft.WindowsTerminalPreview_*') { $pkg = 'Microsoft.WindowsTerminalPreview' }
+                            elseif ($wtJson -like '*Microsoft.WindowsTerminal_*') { $pkg = 'Microsoft.WindowsTerminal' }
+                            if ($pkg) {
+                                try {
+                                    $wtVer = (Get-AppxPackage -Name $pkg -ErrorAction Stop | Sort-Object Version -Descending | Select-Object -First 1).Version
+                                    if ($wtVer -and [version]$wtVer -ge [version]'1.25') { $pref = 'persistedLayoutAndContent' }
+                                } catch {}
+                            }
+                            $curPref = [string]$json.firstWindowPreference
+                            if (-not $curPref -or $curPref -eq 'defaultProfile' -or
+                                ($curPref -eq 'persistedWindowLayout' -and $pref -eq 'persistedLayoutAndContent')) {
+                                if ($curPref -ne $pref) {
+                                    Set-Prop $json 'firstWindowPreference' $pref
+                                    Write-Log "  [OK] WT firstWindowPreference -> $pref"
+                                }
+                            } elseif ($curPref -notlike 'persisted*') {
+                                Write-Log "  [..] WT firstWindowPreference propio ($curPref), se respeta: sin restaurar ventanas"
+                            }
+                            $curWin = [string]$json.windowingBehavior
+                            if (-not $curWin -or $curWin -eq 'useNew') {
+                                Set-Prop $json 'windowingBehavior' 'useAnyExisting'
+                                Write-Log "  [OK] WT windowingBehavior -> useAnyExisting"
+                            }
+                        }
+
                         # --- write back (solo si hay cambios) -------
                         $out = $json | ConvertTo-Json -Depth 64
                         if ($out -ceq $before) {
@@ -1699,6 +2125,87 @@ if (-not `$global:__VortermStarted) {
                     } catch {
                         Write-Log "  [!!] WT cfg: $($_.Exception.Message)"
                         $script:failures += 'wt-config'
+                    }
+                }
+            }
+        }
+
+        # ---- Session restore --------------------------------
+        # Tras un reinicio, un cierre forzado o un cuelgue, cada panel de Windows Terminal
+        # vuelve a su carpeta y retoma la sesion de Claude Code que tenia abierta.
+        #  - restore\term-restore.ps1      -> lo carga el bloque del perfil (carpeta + claude)
+        #  - restore\term-restore-hook.ps1 -> hooks de Claude Code (~\.claude y ~\.claude2)
+        # Se copian a %LOCALAPPDATA%\Vorterm\restore. Si el usuario ya tiene su propio
+        # term-restore (fuera de Vorterm), no se duplica.
+        if ($opts.Restore) {
+            Set-Status 'Session restore' 90
+            $trDst = Join-Path $env:LOCALAPPDATA 'Vorterm\restore'
+            $trOk = $false
+            if (-not $opts.RestoreSrc -or -not (Test-Path -LiteralPath (Join-Path $opts.RestoreSrc 'term-restore.ps1'))) {
+                Write-Log "  [!!] restore\term-restore.ps1 no esta junto al instalador (descarga el repositorio completo)"
+                $script:failures += 'restore'
+            } elseif ($DRY) {
+                Write-Log "  [DRY] copiaria term-restore.ps1 + term-restore-hook.ps1 -> $trDst"
+                $trOk = $true
+            } else {
+                try {
+                    if (-not (Test-Path $trDst)) { New-Item -ItemType Directory -Path $trDst -Force | Out-Null }
+                    foreach ($n in 'term-restore.ps1', 'term-restore-hook.ps1') {
+                        $s = Join-Path $opts.RestoreSrc $n; $d = Join-Path $trDst $n
+                        if ((Test-Path -LiteralPath $d) -and (Get-FileHash -LiteralPath $d).Hash -eq (Get-FileHash -LiteralPath $s).Hash) {
+                            Write-Log "  [OK] $n ya al dia"
+                        } else {
+                            Copy-Item -LiteralPath $s -Destination $d -Force
+                            Write-Log "  [OK] $n -> $trDst"
+                        }
+                    }
+                    $trOk = $true
+                } catch {
+                    Write-Log "  [!!] session restore: $($_.Exception.Message)"
+                    $script:failures += 'restore'
+                }
+            }
+
+            # Hooks de Claude Code: solo en perfiles que ya existen (Claude instalado y abierto
+            # alguna vez). SessionStart + UserPromptSubmit (async, tambien recoge sesiones
+            # abiertas antes) guardan la sesion del panel; SessionEnd la borra al salir a mano.
+            if ($trOk) {
+                $hookPs = (Join-Path $trDst 'term-restore-hook.ps1') -replace '\\', '/'
+                foreach ($cd in '.claude', '.claude2') {
+                    $cf = Join-Path $env:USERPROFILE "$cd\settings.json"
+                    if (-not (Test-Path -LiteralPath $cf)) { continue }
+                    try {
+                        $cj = Get-Content -LiteralPath $cf -Raw -Encoding UTF8 | ConvertFrom-Json
+                        if (-not $cj) { $cj = [pscustomobject]@{} }
+                        $cur = @()
+                        if ($cj.hooks) { foreach ($ev in 'SessionStart','UserPromptSubmit','SessionEnd') { $cur += @($cj.hooks.$ev | Where-Object { $_ }) } }
+                        $foreign = @($cur | Where-Object { @($_.hooks.command) -match 'term-restore-hook' -and -not (@($_.hooks.command) -match 'Vorterm/restore/') })
+                        if ($foreign.Count -gt 0) {
+                            Write-Log "  [..] Claude ${cd}: ya tiene su propio term-restore, no se toca"
+                            continue
+                        }
+                        if (-not $cj.hooks) { $cj | Add-Member -MemberType NoteProperty -Name hooks -Value ([pscustomobject]@{}) }
+                        $changed = $false
+                        foreach ($ev in 'SessionStart','UserPromptSubmit','SessionEnd') {
+                            $mode = 'Start'; if ($ev -eq 'SessionEnd') { $mode = 'End' }
+                            $h = [ordered]@{ type = 'command'; command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$hookPs`" -Mode $mode"; timeout = 10 }
+                            if ($ev -eq 'UserPromptSubmit') { $h.async = $true }
+                            $want = [pscustomobject]@{ hooks = @([pscustomobject]$h) }
+                            $list = @($cj.hooks.$ev | Where-Object { $_ })
+                            $mine = @($list | Where-Object { @($_.hooks.command) -match 'term-restore-hook' })
+                            if ($mine.Count -eq 1 -and $mine[0].hooks[0].command -eq $h.command) { continue }
+                            $list = @($list | Where-Object { -not (@($_.hooks.command) -match 'term-restore-hook') }) + $want
+                            if ($cj.hooks.PSObject.Properties[$ev]) { $cj.hooks.$ev = $list } else { $cj.hooks | Add-Member -MemberType NoteProperty -Name $ev -Value $list }
+                            $changed = $true
+                        }
+                        if (-not $changed) { Write-Log "  [OK] Claude ${cd}: hooks de session restore ya puestos"; continue }
+                        if ($DRY) { Write-Log "  [DRY] Claude ${cd}: pondria hooks SessionStart/UserPromptSubmit/SessionEnd"; continue }
+                        Backup-VortermFile $cf
+                        [System.IO.File]::WriteAllText($cf, ($cj | ConvertTo-Json -Depth 32), (New-Object System.Text.UTF8Encoding $false))
+                        Write-Log "  [OK] Claude ${cd}: hooks de session restore -> $cf"
+                    } catch {
+                        Write-Log "  [!!] Claude ${cd} settings.json: $($_.Exception.Message) (sin hooks; el resto sigue)"
+                        $script:failures += 'restore-hooks'
                     }
                 }
             }
@@ -1874,6 +2381,7 @@ if (-not `$global:__VortermStarted) {
         Write-Log "Glifos como cajas? WT Settings -> PowerShell -> Appearance -> Font -> Nerd Font."
         Write-Log "Helpers: html, open, serve, sudo, touch, profile, SysInfo, Update-Modules."
         if ($opts.MultiPane) { Write-Log "Multi-pane: m2 / m3 / m4 [-Rows] [-Claude], close N, /commands." }
+        if ($opts.Restore) { Write-Log "Session restore: tras reiniciar, Windows Terminal reabre los paneles en su carpeta y retoma Claude." }
         if ($opts.Lab) { Write-Log "LAB: abre $(Join-Path $opts.LabRoot 'LAB')\README.md para empezar." }
         if ($opts.LogFile) { Write-Log "Log completo: $($opts.LogFile)" }
 
@@ -2272,6 +2780,16 @@ $ResetLogic = {
                             }
                         }
 
+                        # Session restore (7.3): solo los valores que pone Vorterm
+                        foreach ($kv in @(@('firstWindowPreference', 'persistedLayoutAndContent|persistedWindowLayout'),
+                                          @('windowingBehavior', 'useAnyExisting'))) {
+                            if ($json.PSObject.Properties.Name -contains $kv[0] -and [string]$json.($kv[0]) -match "^($($kv[1]))$") {
+                                $json.PSObject.Properties.Remove($kv[0])
+                                $changed = $true
+                                Write-Log "  [OK] removed $($kv[0]) (session restore)"
+                            }
+                        }
+
                         if ($json.profiles -and
                             $json.profiles.defaults -and
                             $json.profiles.defaults.font -and
@@ -2294,6 +2812,47 @@ $ResetLogic = {
                         Write-Log "  [!!] $wt : $($_.Exception.Message)"
                         $failures += 'wt'
                     }
+                }
+            }
+        }
+
+        # ---- 5. Session restore (con el perfil) ----------
+        # Sin el bloque del perfil, los hooks de Claude que apuntan a Vorterm\restore ya no
+        # sirven: se quitan (solo los de Vorterm, nunca un term-restore propio) y se borran
+        # las copias de los scripts. Los registros de %LOCALAPPDATA%\TermRestore se quedan.
+        if ($opts.CleanProfile) {
+            Set-Status 'Session restore' 90
+            foreach ($cd in '.claude', '.claude2') {
+                $cf = Join-Path $env:USERPROFILE "$cd\settings.json"
+                if (-not (Test-Path -LiteralPath $cf)) { continue }
+                try {
+                    $cj = Get-Content -LiteralPath $cf -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if (-not $cj -or -not $cj.hooks) { continue }
+                    $changed = $false
+                    foreach ($ev in 'SessionStart','UserPromptSubmit','SessionEnd') {
+                        if (-not $cj.hooks.PSObject.Properties[$ev]) { continue }
+                        $all  = @($cj.hooks.$ev | Where-Object { $_ })
+                        $keep = @($all | Where-Object { -not (@($_.hooks.command) -match 'Vorterm/restore/term-restore-hook') })
+                        if ($keep.Count -eq $all.Count) { continue }
+                        if ($keep.Count) { $cj.hooks.$ev = $keep } else { $cj.hooks.PSObject.Properties.Remove($ev) }
+                        $changed = $true
+                    }
+                    if (-not $changed) { continue }
+                    if ($DRY) { Write-Log "  [DRY] quitaria hooks de session restore de $cf"; continue }
+                    Copy-Item -LiteralPath $cf -Destination "$cf.before-reset-$stamp" -Force
+                    [System.IO.File]::WriteAllText($cf, ($cj | ConvertTo-Json -Depth 32), (New-Object System.Text.UTF8Encoding $false))
+                    Write-Log "  [OK] removed session restore hooks: $cf"
+                } catch {
+                    Write-Log "  [!!] $cf : $($_.Exception.Message)"
+                    $failures += 'restore-hooks'
+                }
+            }
+            $trDir = Join-Path $env:LOCALAPPDATA 'Vorterm\restore'
+            if (Test-Path -LiteralPath $trDir) {
+                if ($DRY) { Write-Log "  [DRY] borraria $trDir" }
+                else {
+                    Remove-Item -LiteralPath $trDir -Recurse -Force -ErrorAction SilentlyContinue
+                    Write-Log "  [OK] removed $trDir"
                 }
             }
         }
@@ -2384,6 +2943,8 @@ $script:LabScriptPath = $null
 $script:BgSrc = $null
 if ($PSScriptRoot) { $script:BgSrc = Join-Path $PSScriptRoot 'assets\vorterm-bg.png' }
 if ($PSScriptRoot) { $script:LabScriptPath = Join-Path $PSScriptRoot 'lab\New-VortermLab.ps1' }
+$script:RestoreSrc = $null
+if ($PSScriptRoot) { $script:RestoreSrc = Join-Path $PSScriptRoot 'restore' }
 
 if ($NoGui) {
     $sync = @{
@@ -2417,6 +2978,8 @@ if ($NoGui) {
         WriteProfile = $true
         WTConfig     = $true
         MultiPane    = -not $NoMultiPane
+        Restore      = -not $NoRestore
+        RestoreSrc   = $script:RestoreSrc
         Elevate      = $false
         VSCode       = [bool]$VSCode
         Neovim       = $false
@@ -2453,7 +3016,7 @@ if ($NoGui) {
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Vorterm 7.2"
+        Title="Vorterm 7.3"
         Height="940" Width="1700"
         MinHeight="560" MinWidth="980"
         WindowStartupLocation="CenterScreen"
@@ -2787,7 +3350,7 @@ if ($NoGui) {
             <DropShadowEffect Color="#fcee0a" BlurRadius="22" ShadowDepth="0" Opacity="0.7"/>
           </TextBlock.Effect>
         </TextBlock>
-        <TextBlock Text="VII.2"
+        <TextBlock Text="VII.3"
                    FontFamily="JetBrains Mono, Cascadia Mono, Consolas"
                    FontSize="12" Foreground="{StaticResource Muted}"
                    HorizontalAlignment="Center" Margin="0,4,0,0"/>
@@ -2847,7 +3410,9 @@ if ($NoGui) {
             <UniformGrid Columns="2">
               <CheckBox x:Name="cb_multipane" Content="multi-pane"   IsChecked="True"
                         ToolTip="m2 / m3 / m4 (2, 3 o 4 paneles), close N y /commands. Perfil oculto Vorterm Mosaic (negro, sin imagen).&#10;Atajos Ctrl+Shift+3 / B / Z solo si estan libres."/>
-              <CheckBox x:Name="cb_lab"     Content="lab"            IsChecked="False"
+              <CheckBox x:Name="cb_restore" Content="session restore" IsChecked="True"
+                        ToolTip="Tras reiniciar o un cierre forzado, Windows Terminal reabre cada panel en su carpeta y retoma la sesion de Claude Code que tenia.&#10;WT abre como pestana en la ventana que ya hay. Hooks en ~\.claude y ~\.claude2 si existen."/>
+              <CheckBox x:Name="cb_lab"    Content="lab"            IsChecked="False"
                         ToolTip="Estructura de trabajo LAB (Azure, M365, Intune, seguridad...) con CLAUDE.md, plantillas y documentacion. Solo ficheros locales."/>
             </UniformGrid>
             <StackPanel x:Name="LabPanel" Visibility="Collapsed" Margin="26,2,0,6">
@@ -2874,7 +3439,7 @@ if ($NoGui) {
                        Foreground="{StaticResource Danger}"/>
             <Border Style="{StaticResource SectionRule}" Background="{StaticResource Danger}"/>
             <CheckBox x:Name="cb_clean_profile" Content="powershell profiles" IsChecked="True"
-                      ToolTip="Restaura backup Vorterm o mueve el perfil a .before-reset-*"/>
+                      ToolTip="Restaura backup Vorterm o mueve el perfil a .before-reset-*&#10;Quita tambien session restore (scripts y hooks de Vorterm en Claude Code)"/>
             <CheckBox x:Name="cb_clean_history" Content="psreadline history"  IsChecked="False"
                       ToolTip="Borra los ficheros *_history.txt de PSReadLine (sin copia)"/>
             <CheckBox x:Name="cb_clean_modules" Content="terminal modules"    IsChecked="True"
@@ -2937,6 +3502,25 @@ if ($NoGui) {
             <DropShadowEffect Color="#fcee0a" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/>
           </ProgressBar.Effect>
         </ProgressBar>
+        <!-- Light travelling along the progress hairline while something runs (Vorterm motion) -->
+        <Canvas x:Name="ProgressBeam" Height="14" VerticalAlignment="Center" ClipToBounds="True"
+                IsHitTestVisible="False" Visibility="Collapsed">
+          <Border x:Name="BeamDot" Width="140" Height="2" Canvas.Top="6">
+            <Border.Background>
+              <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                <GradientStop Color="#00fff6a8" Offset="0"/>
+                <GradientStop Color="#fffff6a8" Offset="0.5"/>
+                <GradientStop Color="#00fff6a8" Offset="1"/>
+              </LinearGradientBrush>
+            </Border.Background>
+            <Border.Effect>
+              <DropShadowEffect Color="#fff6a8" BlurRadius="10" ShadowDepth="0" Opacity="0.9"/>
+            </Border.Effect>
+            <Border.RenderTransform>
+              <TranslateTransform x:Name="BeamX" X="-140"/>
+            </Border.RenderTransform>
+          </Border>
+        </Canvas>
         <Button x:Name="PauseBtn" Grid.Column="1" Content="PAUSE"
                 Style="{StaticResource GhostButton}"
                 Padding="18,6" FontSize="12"
@@ -3007,7 +3591,7 @@ $controls = @{}
 foreach ($n in 'PathBox','BrowseBtn','LogBox','Progress','StatusText','ExitBtn','ResetBtn','InstallBtn','PauseBtn',
                'PathsPanel','RootScroll','RootGrid',
                'cb_vscode','cb_neovim','cb_7zip','cb_github','cb_wsl',
-               'cb_claude','cb_codex','cb_antigrav','cb_node','cb_multipane','cb_lab',
+               'cb_claude','cb_codex','cb_antigrav','cb_node','cb_multipane','cb_restore','cb_lab',
                'SetupPanel','LabPanel','LabPathBox','LabBrowseBtn','LabTarget',
                'StartupRow','ConfigRow','OptionsBtn',
                'cb_clean_profile','cb_clean_wt','cb_clean_modules','cb_clean_history') {
@@ -3041,6 +3625,112 @@ $controls.PathsPanel.Add_SizeChanged({ Update-RootHeight })
 $controls.SetupPanel.Add_SizeChanged({ Update-RootHeight })
 # Primer calculo cuando el layout inicial ya tiene medidas reales
 $window.Add_ContentRendered({ Update-RootHeight })
+
+# ------ Motion (7.3, same language as PastDow) ----------------
+# Minimal and quick: sections rise in on open, a light runs along the progress hairline while
+# something works, the status breathes, the bar flashes on finish, and the window minimises into
+# its taskbar button (genie). Off when Windows animations are off or VORTERM_NO_MOTION=1.
+$script:Motion = $true
+try { if (-not [System.Windows.SystemParameters]::ClientAreaAnimation) { $script:Motion = $false } } catch {}
+if ($env:VORTERM_NO_MOTION -eq '1') { $script:Motion = $false }
+$script:Busy = $false
+
+function New-VtEase([string]$Kind = 'Quintic', [string]$Mode = 'EaseOut') {
+    $e = New-Object "System.Windows.Media.Animation.$($Kind)Ease"
+    $e.EasingMode = [System.Windows.Media.Animation.EasingMode]::$Mode
+    return $e
+}
+
+function New-VtAnim {
+    param($From, $To, [double]$Seconds, [double]$Delay = 0, $Ease = (New-VtEase))
+    $a = New-Object System.Windows.Media.Animation.DoubleAnimation
+    if ($null -ne $From) { $a.From = [double]$From }
+    $a.To = [double]$To
+    $a.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromSeconds($Seconds))
+    $a.BeginTime = [TimeSpan]::FromSeconds($Delay)
+    if ($Ease) { $a.EasingFunction = $Ease }
+    return $a
+}
+
+# Intro: each block of the window fades in and rises 14 px, one after another.
+if ($script:Motion) {
+    $script:IntroItems = @($controls.RootGrid.Children)
+    foreach ($el in $script:IntroItems) {
+        $el.Opacity = 0
+        $el.RenderTransform = New-Object System.Windows.Media.TranslateTransform 0, 14
+    }
+    $window.Add_Loaded({
+        try {
+            $i = 0
+            foreach ($el in $script:IntroItems) {
+                $d = 0.08 + 0.07 * $i
+                $el.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-VtAnim 0 1 0.9 $d))
+                $el.RenderTransform.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, (New-VtAnim 14 0 0.9 $d))
+                $i++
+            }
+        } catch {
+            # never leave the window blank: show everything as it is
+            foreach ($el in $script:IntroItems) { $el.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null); $el.Opacity = 1 }
+        }
+    })
+}
+
+function Start-VtBusy {
+    $script:Busy = $true
+    if (-not $script:Motion) { return }
+    $beam = $window.FindName('ProgressBeam'); $dot = $window.FindName('BeamDot')
+    $beam.Visibility = [System.Windows.Visibility]::Visible
+    $w = [Math]::Max(120, $controls.Progress.ActualWidth)
+    # travel 0 -> 60 % of the cycle, then rest (as the PastDow beam)
+    $k = New-Object System.Windows.Media.Animation.DoubleAnimationUsingKeyFrames
+    $k.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromSeconds(2.8))
+    $k.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+    [void]$k.KeyFrames.Add((New-Object System.Windows.Media.Animation.LinearDoubleKeyFrame -140, ([System.Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::Zero))))
+    $f = New-Object System.Windows.Media.Animation.EasingDoubleKeyFrame $w, ([System.Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromSeconds(1.68)))
+    $f.EasingFunction = New-VtEase 'Sine' 'EaseInOut'
+    [void]$k.KeyFrames.Add($f)
+    [void]$k.KeyFrames.Add((New-Object System.Windows.Media.Animation.DiscreteDoubleKeyFrame $w, ([System.Windows.Media.Animation.KeyTime]::FromTimeSpan([TimeSpan]::FromSeconds(2.8)))))
+    $dot.RenderTransform.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty, $k)
+    # status breathes while it runs
+    $b = New-VtAnim 1 0.5 2.1 0 (New-VtEase 'Sine' 'EaseInOut')
+    $b.AutoReverse = $true
+    $b.RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
+    $controls.StatusText.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $b)
+}
+
+function Stop-VtBusy {
+    $was = $script:Busy
+    $script:Busy = $false
+    if (-not $script:Motion) { return }
+    $window.FindName('BeamDot').RenderTransform.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty, $null)
+    $window.FindName('ProgressBeam').Visibility = [System.Windows.Visibility]::Collapsed
+    $controls.StatusText.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $null)
+    if (-not $was) { return }
+    # finish: the bar glows once in its result colour and settles
+    $fx = $controls.Progress.Effect
+    if ($fx -is [System.Windows.Media.Effects.DropShadowEffect]) {
+        $glow = New-VtAnim 34 8 0.9 0 (New-VtEase 'Cubic' 'EaseOut')
+        $fx.BeginAnimation([System.Windows.Media.Effects.DropShadowEffect]::BlurRadiusProperty, $glow)
+        $fx.BeginAnimation([System.Windows.Media.Effects.DropShadowEffect]::OpacityProperty, (New-VtAnim 1 0.7 0.9 0 (New-VtEase 'Cubic' 'EaseOut')))
+    }
+    $controls.StatusText.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-VtAnim 0.2 1 0.6))
+}
+
+# Install and Reset both disable INSTALL while they run and enable it again at the end.
+$controls.InstallBtn.Add_IsEnabledChanged({
+    if ($controls.InstallBtn.IsEnabled) { Stop-VtBusy } else { Start-VtBusy }
+})
+# The beam spans the bar: restart it with the new width when the window is resized.
+$controls.Progress.Add_SizeChanged({ if ($script:Busy) { Start-VtBusy } })
+
+# Genie: hooked once the window has its HWND.
+$window.Add_SourceInitialized({
+    if (-not $script:Motion -or -not ('Vorterm.Genie' -as [type])) { return }
+    try {
+        $h = (New-Object System.Windows.Interop.WindowInteropHelper($window)).Handle
+        $script:Genie = [Vorterm.Genie]::Attach($h, 'Vorterm')
+    } catch {}
+})
 
 # ------ Log document (RichTextBox con colores) ---------------
 function Reset-LogDocument {
@@ -3176,7 +3866,26 @@ $finishXaml = @'
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         WindowStyle="None" ResizeMode="NoResize" SizeToContent="Height" Width="560"
         WindowStartupLocation="CenterOwner" Background="#050506" ShowInTaskbar="False" Topmost="True">
-  <Border x:Name="FinBorder" BorderBrush="#e10024" BorderThickness="1" Padding="34,26,34,24">
+  <Border x:Name="FinBorder" BorderBrush="#e10024" BorderThickness="1" Padding="34,26,34,24"
+          Opacity="0" RenderTransformOrigin="0.5,0.5">
+    <Border.RenderTransform>
+      <ScaleTransform ScaleX="0.97" ScaleY="0.97"/>
+    </Border.RenderTransform>
+    <Border.Triggers>
+      <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+        <BeginStoryboard>
+          <Storyboard>
+            <DoubleAnimation Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.35"/>
+            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1" Duration="0:0:0.5">
+              <DoubleAnimation.EasingFunction><QuinticEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1" Duration="0:0:0.5">
+              <DoubleAnimation.EasingFunction><QuinticEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+          </Storyboard>
+        </BeginStoryboard>
+      </EventTrigger>
+    </Border.Triggers>
     <StackPanel>
       <TextBlock Text="VORTERM // SYSTEM" Foreground="#6a6c70" FontSize="11"
                  FontFamily="JetBrains Mono, Cascadia Mono, Consolas"/>
@@ -3276,6 +3985,8 @@ $controls.InstallBtn.Add_Click({
         Antigravity  = $controls.cb_antigrav.IsChecked
         Node         = $controls.cb_node.IsChecked
         MultiPane    = $controls.cb_multipane.IsChecked
+        Restore      = [bool]$controls.cb_restore.IsChecked
+        RestoreSrc   = $script:RestoreSrc
         Lab          = [bool]$controls.cb_lab.IsChecked
         LabRoot      = $controls.LabPathBox.Text.Trim().Trim('"')
         LabAdopt     = $false

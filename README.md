@@ -5,7 +5,7 @@
 </td>
 <td valign="middle">
 
-### VORTERM 7.2
+### VORTERM 7.3
 
 **From clean Windows to modern dev shell**
 *one click*
@@ -15,7 +15,7 @@
 ![winget](https://img.shields.io/badge/winget-silent-FCEE0A?logoColor=black)
 ![license](https://img.shields.io/badge/license-MIT-1a1a1a)
 
-[Install](#-install) · [Stack](#-stack) · [Multi-pane](#-multi-pane) · [Lab](#-lab-optional) · [Claude Code](#-claude-code-companion) · [Reset](#-reset)
+[Install](#-install) · [Stack](#-stack) · [Multi-pane](#-multi-pane) · [Session restore](#️-session-restore) · [Lab](#-lab-optional) · [Claude Code](#-claude-code-companion) · [Reset](#-reset)
 
 </td>
 </tr>
@@ -118,6 +118,19 @@ so text stays readable). On by default.
 
 ---
 
+## ♻️ Session restore
+
+After a reboot, a crash or a forced close, Windows Terminal reopens its tabs and panes,
+each one goes back to its folder and resumes the Claude Code session it had open
+(`claude --resume <id>`, also for a second profile in `~\.claude2`). On by default.
+
+- Opening Windows Terminal while a window is open adds a tab there instead of a new window.
+- Leaving Claude on purpose (`/exit`) clears the record: only interrupted sessions come back.
+- Claude Code hooks are added only to profiles that already exist; your own hooks stay.
+- `m2 -Claude` panes that come back resume their session instead of starting a new one.
+
+---
+
 ## 🧪 Lab (optional)
 
 Tick **lab**, choose a folder, and Vorterm creates `<folder>\LAB`: a
@@ -154,8 +167,8 @@ its own marked block in the profile, outside Vorterm's).
 ## 🔄 Reset
 
 One click. Removes only what Vorterm added: its profile block (your own lines stay), the
-user copies of its modules, the Mosaic profile and its shortcuts, and returns Windows
-Terminal settings to the state before Vorterm. A `.before-reset-*` copy is kept every time.
+user copies of its modules, the Mosaic profile and its shortcuts, the session restore
+scripts and hooks, and returns Windows Terminal settings to the state before Vorterm. A `.before-reset-*` copy is kept every time.
 Your LAB folder is never touched.
 
 ---
