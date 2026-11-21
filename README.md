@@ -5,7 +5,7 @@
 </td>
 <td valign="middle">
 
-### VORTERM 7.4
+### VORTERM 7.5
 
 **From clean Windows to modern dev shell**
 *one click*
@@ -157,8 +157,9 @@ Tick **claude code config** and Vorterm sets up Claude Code completely (it also 
 | | |
 | :-- | :-- |
 | Permissions | `bypassPermissions` as the default mode and no start-up warning, in `~\.claude` and `~\.claude2`, enforced again on every install; deny rules for `.env`, SSH keys, certificates and cloud credentials |
-| Plugins | commit-commands, security-guidance, claude-security, feature-dev, pr-review-toolkit, claude-md-management, claude-code-setup, superpowers, frontend-design, session-report |
-| MCP and tools | codebase-memory-mcp (code graph), context7 (library docs), agent-browser, gitleaks |
+| Plugins | security-guidance, feature-dev, claude-md-management, microsoft-docs, frontend-design. Kept lean on purpose: plugins that were never used in practice only cost context on every turn |
+| MCP and tools | codebase-memory-mcp (code graph), context7 (library docs), agent-browser, gitleaks, ripgrep |
+| Output trimming | [RTK](https://github.com/rtk-ai/rtk): a hook rewrites shell commands (Bash and PowerShell) to `rtk <command>`, which drops progress bars and boilerplate before the output reaches the context. `grep` and `curl` are left alone; `rtk gain` shows what it saved |
 | Second profile | `claude2` (second account in `~\.claude2`, same stack) |
 | Status line | 5-hour / weekly usage and context percent, only if you have none |
 | Workspace | `Documents\claude-lab`: `CLAUDE.md` with working rules, `proyectos\_plantilla`, `scripts`, `docs\lecciones`, `privado` and `_archivo` kept out of git. Existing files are never overwritten |
