@@ -1,5 +1,24 @@
 # Changelog
 
+## 7.5.1 - 2026-11-21
+
+### Added
+- **codex cli** now gets Claude Code's setup (`claude\Set-VortermCodex.ps1`, `-Codex` unattended):
+  the plugins enabled in Claude (through the same local marketplaces), the MCP servers of
+  `~\.claude.json` and of plugins with no Codex version (in a marked block of
+  `~\.codex\config.toml`; `npx` through `cmd /c`), Claude's skills as junctions in `~\.agents\skills`,
+  and `CLAUDE.md` read as project instructions. Runs after claude code config, safe to repeat, never
+  touches Claude's files, a real skill folder or an existing `~\.codex\AGENTS.md`. Sign-in stays
+  manual: `codex login`. Claude hooks (RTK, status line, restore) have no Codex equivalent.
+
+### Changed
+- Options react faster: 180 ms to tick, 120 ms to untick (was up to 450 ms).
+- Unticked options are easier to read: text at 69 % opacity (was 50 %).
+- PATHS labels and missing paths have more contrast on the dark background.
+- The LAB details fade in over 160 ms when LAB is ticked.
+- The progress bar glides to each new value over 200 ms instead of jumping.
+- The header shows VII.5.
+
 ## 7.5 - 2026-11-21
 
 ### Added

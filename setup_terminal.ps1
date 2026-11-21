@@ -14,6 +14,7 @@
 #    -NoRestore    : sin session restore (paneles y sesiones de Claude tras reinicio)
 #    -ClaudeConfig : claude code config (bypassPermissions siempre, plugins/MCP essentials,
 #                    barra de estado, segundo perfil, carpeta claude-lab); implica -ClaudeCode -Node
+#    -Codex        : Codex CLI (winget) con los plugins, MCP y skills de Claude Code
 #    -Reset       : deshace la configuracion Vorterm (perfiles, modulos, WT)
 # =============================================================
 
@@ -30,6 +31,7 @@ param(
     [switch]$NoMultiPane,
     [switch]$NoRestore,
     [switch]$ClaudeConfig,
+    [switch]$Codex,
     [switch]$Reset,
     [switch]$NoElevate
 )
@@ -621,7 +623,7 @@ $InstallLogic = {
         if ($sync.NoGui) { Write-Host ">> $Text" -ForegroundColor DarkYellow; return }
         $sync.Window.Dispatcher.Invoke([action]{
             $sync.StatusText.Text = $Text
-            if ($Pct -ge 0) { $sync.Progress.Value = $Pct }
+            if ($Pct -ge 0) { $from = $sync.Progress.Value; $sync.Progress.Value = $Pct; if ($sync.Motion -and $Pct -gt $from) { $a = New-Object System.Windows.Media.Animation.DoubleAnimation($from, $Pct, ([System.Windows.Duration][TimeSpan]::FromMilliseconds(200))); $a.FillBehavior = 'Stop'; $a.EasingFunction = New-Object System.Windows.Media.Animation.QuadraticEase; $sync.Progress.BeginAnimation([System.Windows.Controls.Primitives.RangeBase]::ValueProperty, $a) } }
         })
     }
 
@@ -2214,6 +2216,21 @@ if (-not `$global:__VortermStarted) {
                 $script:failures += 'claude-config'
             }
         }
+        # ---- Codex with Claude Code's plugins, MCP servers and skills -------
+        # claude\Set-VortermCodex.ps1, after claude code config so it copies the final state.
+        if ($opts.Codex -and $opts.ClaudeCfgScript) {
+            $cxScript = Join-Path (Split-Path $opts.ClaudeCfgScript) 'Set-VortermCodex.ps1'
+            if (Test-Path -LiteralPath $cxScript) {
+                Set-Status 'Codex: Claude Code plugins, MCP servers and skills' 89
+                try {
+                    $cx = & $cxScript -DryRun:$DRY -PassThru -Log { param($m) Write-Log $m }
+                    if (-not $cx.Ok) { $script:failures += @($cx.Failures | ForEach-Object { "codex-config:$_" }) }
+                } catch {
+                    Write-Log "  [!!] Codex config: $($_.Exception.Message)"
+                    $script:failures += 'codex-config'
+                }
+            }
+        }
         # term-restore (fuera de Vorterm), no se duplica.
         if ($opts.Restore) {
             Set-Status 'Session restore' 90
@@ -2545,7 +2562,7 @@ $ResetLogic = {
         if ($sync.NoGui) { Write-Host ">> $Text" -ForegroundColor DarkYellow; return }
         $sync.Window.Dispatcher.Invoke([action]{
             $sync.StatusText.Text = $Text
-            if ($Pct -ge 0) { $sync.Progress.Value = $Pct }
+            if ($Pct -ge 0) { $from = $sync.Progress.Value; $sync.Progress.Value = $Pct; if ($sync.Motion -and $Pct -gt $from) { $a = New-Object System.Windows.Media.Animation.DoubleAnimation($from, $Pct, ([System.Windows.Duration][TimeSpan]::FromMilliseconds(200))); $a.FillBehavior = 'Stop'; $a.EasingFunction = New-Object System.Windows.Media.Animation.QuadraticEase; $sync.Progress.BeginAnimation([System.Windows.Controls.Primitives.RangeBase]::ValueProperty, $a) } }
         })
     }
 
@@ -3069,7 +3086,7 @@ if ($NoGui) {
         ClaudeCode   = [bool]$ClaudeCode -or [bool]$ClaudeConfig
         ClaudeConfig = [bool]$ClaudeConfig
         ClaudeCfgScript = $script:ClaudeCfgScript
-        Codex        = $false
+        Codex        = [bool]$Codex
         Antigravity  = $false
         Node         = [bool]$Node -or [bool]$ClaudeConfig
         Lab          = [bool]$LabRoot
@@ -3163,7 +3180,7 @@ if ($NoGui) {
                 </Ellipse>
               </Grid>
               <Grid Grid.Column="1">
-                <ContentPresenter x:Name="cp" VerticalAlignment="Center" Opacity="0.5" RecognizesAccessKey="True"/>
+                <ContentPresenter x:Name="cp" VerticalAlignment="Center" Opacity="0.69" RecognizesAccessKey="True"/>
                 <Rectangle x:Name="ul" Height="1" VerticalAlignment="Bottom" Margin="0,0,0,-3" Fill="#fcee0a"
                            Opacity="0.75" RenderTransformOrigin="0,0.5">
                   <Rectangle.RenderTransform><ScaleTransform ScaleX="0"/></Rectangle.RenderTransform>
@@ -3175,26 +3192,26 @@ if ($NoGui) {
                 <Trigger.EnterActions>
                   <BeginStoryboard>
                     <Storyboard>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2"/>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.45">
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.18">
                         <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
                       </DoubleAnimation>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.45">
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.18">
                         <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
                       </DoubleAnimation>
-                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#fcee0a" Duration="0:0:0.3"/>
-                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.3"/>
+                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#fcee0a" Duration="0:0:0.18"/>
+                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18"/>
                     </Storyboard>
                   </BeginStoryboard>
                 </Trigger.EnterActions>
                 <Trigger.ExitActions>
                   <BeginStoryboard>
                     <Storyboard>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25"/>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.2" Duration="0:0:0.25"/>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.2" Duration="0:0:0.25"/>
-                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#4a4b50" Duration="0:0:0.3"/>
-                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="0.5" Duration="0:0:0.3"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.2" Duration="0:0:0.12"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.2" Duration="0:0:0.12"/>
+                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#4a4b50" Duration="0:0:0.12"/>
+                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="0.69" Duration="0:0:0.12"/>
                     </Storyboard>
                   </BeginStoryboard>
                 </Trigger.ExitActions>
@@ -3251,7 +3268,7 @@ if ($NoGui) {
                 </Ellipse>
               </Grid>
               <Grid Grid.Column="1">
-                <ContentPresenter x:Name="cp" VerticalAlignment="Center" Opacity="0.5" RecognizesAccessKey="True"/>
+                <ContentPresenter x:Name="cp" VerticalAlignment="Center" Opacity="0.69" RecognizesAccessKey="True"/>
                 <Rectangle x:Name="ul" Height="1" VerticalAlignment="Bottom" Margin="0,0,0,-3" Fill="#e10024"
                            Opacity="0.75" RenderTransformOrigin="0,0.5">
                   <Rectangle.RenderTransform><ScaleTransform ScaleX="0"/></Rectangle.RenderTransform>
@@ -3263,26 +3280,26 @@ if ($NoGui) {
                 <Trigger.EnterActions>
                   <BeginStoryboard>
                     <Storyboard>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2"/>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.45">
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.18">
                         <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
                       </DoubleAnimation>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.45">
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.18">
                         <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
                       </DoubleAnimation>
-                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#e10024" Duration="0:0:0.3"/>
-                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.3"/>
+                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#e10024" Duration="0:0:0.18"/>
+                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18"/>
                     </Storyboard>
                   </BeginStoryboard>
                 </Trigger.EnterActions>
                 <Trigger.ExitActions>
                   <BeginStoryboard>
                     <Storyboard>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25"/>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.2" Duration="0:0:0.25"/>
-                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.2" Duration="0:0:0.25"/>
-                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#4a4b50" Duration="0:0:0.3"/>
-                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="0.5" Duration="0:0:0.3"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.2" Duration="0:0:0.12"/>
+                      <DoubleAnimation Storyboard.TargetName="dot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.2" Duration="0:0:0.12"/>
+                      <ColorAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="(Shape.Stroke).(SolidColorBrush.Color)" To="#4a4b50" Duration="0:0:0.12"/>
+                      <DoubleAnimation Storyboard.TargetName="cp" Storyboard.TargetProperty="Opacity" To="0.69" Duration="0:0:0.12"/>
                     </Storyboard>
                   </BeginStoryboard>
                 </Trigger.ExitActions>
@@ -3600,7 +3617,7 @@ if ($NoGui) {
             <DropShadowEffect Color="#fcee0a" BlurRadius="22" ShadowDepth="0" Opacity="0.7"/>
           </TextBlock.Effect>
         </TextBlock>
-        <TextBlock Text="VII.4"
+        <TextBlock Text="VII.5"
                    FontFamily="JetBrains Mono, Cascadia Mono, Consolas"
                    FontSize="12" Foreground="{StaticResource Muted}"
                    HorizontalAlignment="Center" Margin="0,4,0,0"/>
@@ -3654,7 +3671,7 @@ if ($NoGui) {
               <CheckBox x:Name="cb_claudecfg" Content="claude code config" IsChecked="False"
                         ToolTip="permissions.defaultMode=bypassPermissions + skipDangerousModePermissionPrompt (always, ~/.claude and ~/.claude2) + deny rules for secrets | ClaudeCode_SETUP essentials: 10 plugins, codebase-memory-mcp, context7, agent-browser, gitleaks | second profile (claude2) | status line | claude-lab folder. WARNING: Claude runs commands without asking. Ticks claude code and node.js lts."/>
               <CheckBox x:Name="cb_codex"   Content="codex cli"      IsChecked="False"
-                        ToolTip="CLI agente de OpenAI (winget OpenAI.Codex)"/>
+                        ToolTip="CLI agente de OpenAI (winget OpenAI.Codex).&#10;Recibe los plugins, MCP y skills de Claude Code si hay perfil de Claude (codex login a mano)"/>
               <CheckBox x:Name="cb_antigrav" Content="antigravity"   IsChecked="False"
                         ToolTip="IDE agente de Google (winget Google.Antigravity)"/>
             </UniformGrid>
@@ -4018,13 +4035,13 @@ function Add-PathRow {
     param([string]$Label, [string]$Value)
     $exists = $false
     if ($Value) { $exists = Test-Path $Value -ErrorAction SilentlyContinue }
-    $valueColor = if ($exists) { '#e8e8e8' } else { '#3a3b40' }
+    $valueColor = if ($exists) { '#e8e8e8' } else { '#6e7078' }
 
     $lbl = New-Object System.Windows.Controls.TextBlock
     $lbl.Text = $Label.ToUpper()
     $lbl.FontSize = 12
     $lbl.FontFamily = 'JetBrains Mono, Cascadia Mono, Consolas'
-    $lbl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#8a8104')
+    $lbl.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#b3a706')
     $lbl.Margin = '0,10,0,3'
     [void]$controls.PathsPanel.Children.Add($lbl)
 
@@ -4081,7 +4098,13 @@ function Update-LabTarget {
 $controls.LabPathBox.Text = $docsRoot
 Update-LabTarget
 $controls.LabPathBox.Add_TextChanged({ Update-LabTarget })
-$controls.cb_lab.Add_Checked({   $controls.LabPanel.Visibility = [System.Windows.Visibility]::Visible })
+$controls.cb_lab.Add_Checked({
+    $controls.LabPanel.Visibility = [System.Windows.Visibility]::Visible
+    if ($script:Motion) {
+        $fade = New-Object System.Windows.Media.Animation.DoubleAnimation(0, 1, ([System.Windows.Duration][TimeSpan]::FromMilliseconds(160)))
+        $controls.LabPanel.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)
+    }
+})
 # claude code config needs Claude Code itself and Node.js (MCP servers): tick them along.
 $controls.cb_claudecfg.Add_Checked({ $controls.cb_claude.IsChecked = $true; $controls.cb_node.IsChecked = $true })
 $controls.cb_lab.Add_Unchecked({ $controls.LabPanel.Visibility = [System.Windows.Visibility]::Collapsed })
@@ -4182,6 +4205,7 @@ $sync = [hashtable]::Synchronized(@{
     PauseBtn    = $controls.PauseBtn
     ActiveProcs = [System.Collections.ArrayList]::new()
     Paused      = $false
+    Motion      = $script:Motion
 })
 
 # Pause / Resume click handler (suspends winget child procs)
