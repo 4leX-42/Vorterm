@@ -1,5 +1,5 @@
 # =============================================================
-#  Vorterm 7.4  (WPF GUI)
+#  Vorterm 7.5  (WPF GUI)
 #  Run via INSTALAR.bat (powershell.exe -STA -WindowStyle Hidden)
 #
 #  CLI (sin GUI, desatendido / pruebas):
@@ -34,7 +34,7 @@ param(
     [switch]$NoElevate
 )
 
-$script:VortermVersion = '7.4'
+$script:VortermVersion = '7.5'
 
 # ------ PSModulePath de Windows PowerShell ---------------------
 # Lanzado desde pwsh 7 (comando de una linea pegado en pwsh) o con un PSModulePath de
@@ -3098,7 +3098,7 @@ if ($NoGui) {
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Vorterm 7.4"
+        Title="Vorterm 7.5"
         Height="940" Width="1700"
         MinHeight="560" MinWidth="980"
         WindowStartupLocation="CenterScreen"

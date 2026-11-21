@@ -8,6 +8,10 @@
        on every run (other keys in those files are kept).
     2. Plugins, MCP servers and tools: runs the Claude Code Setup Guide engine
        (github.com/4leX-42/ClaudeCode_SETUP) with its "essentials" manifest and --second-profile.
+       Essentials since Vorterm 7.5: security-guidance, feature-dev, claude-md-management,
+       microsoft-docs, frontend-design, context7, codebase-memory-mcp, agent-browser, gitleaks,
+       ripgrep and rtk.
+    2b. RTK: its PreToolUse hook in both profiles (Bash and PowerShell), grep and curl excluded.
     3. Status line: 5-hour / weekly usage and context percent (only if you have none).
     4. Workspace: a generic lab folder structure with a CLAUDE.md (only files that are missing).
 
@@ -28,6 +32,7 @@ param(
     [string]$EngineZip = 'https://github.com/4leX-42/ClaudeCode_SETUP/archive/refs/heads/main.zip',
     [switch]$NoSecondProfile,
     [switch]$NoWorkspace,
+    [switch]$NoRtk,                      # leave RTK's hook out (the binary may still be installed)
     [int]$EngineTimeoutMin = 30,
     [int]$EngineStallMin = 10,
     [switch]$DryRun,
@@ -169,6 +174,81 @@ if (-not $Pwsh) {
     } catch {
         L "  [!!] engine: $($_.Exception.Message)"
         $script:fail += 'engine'
+    }
+}
+
+# ---- 2b. RTK: trims command output before it reaches the context ------------------------------
+# The engine installs the rtk binary (and ripgrep); the hook is per config dir, so it is set here for
+# both profiles. rtk registers it for Bash only: on Windows Claude Code also runs PowerShell, so the
+# matcher is widened. grep and curl are excluded: their filters change what the next command in a pipe
+# receives. An existing %APPDATA%\rtk\config.toml is never touched.
+if (-not $NoRtk) {
+    L '  -- RTK (command-output trimmer)'
+    Update-Path
+    if (-not (Get-Command rtk -ErrorAction SilentlyContinue)) {
+        L '  [..] rtk not installed (the engine could not get it): skipped'
+    } else {
+        $toml = Join-Path $env:APPDATA 'rtk\config.toml'
+        if (Test-Path -LiteralPath $toml) {
+            L "  [OK] $toml kept as it is"
+        } elseif ($DryRun) {
+            L "  [DRY] would write $toml (telemetry off, grep and curl not rewritten)"
+        } else {
+            New-Item -ItemType Directory -Path (Split-Path $toml) -Force | Out-Null
+            [IO.File]::WriteAllText($toml, (@'
+# Written by Vorterm. Only what differs from rtk's defaults (rtk config shows them all).
+[telemetry]
+enabled = false
+
+[hooks]
+# grep: the filter cuts lines and hides matches, also inside a pipe. curl: it summarises JSON
+# bodies and the values that were going to be read are lost.
+exclude_commands = ["grep", "curl"]
+
+[display]
+# rtk needs the whole section when it is present.
+colors = true
+emoji = true
+max_width = 400
+
+[limits]
+grep_max_results = 200
+grep_max_per_file = 25
+status_max_files = 2000
+status_max_untracked = 2000
+passthrough_max_chars = 400000
+'@ -replace "`r?`n", "`r`n"), $utf8)
+            L "  [OK] $toml written"
+        }
+        $prevCfg = $env:CLAUDE_CONFIG_DIR
+        foreach ($d in $cfgDirs) {
+            try {
+                if (-not $DryRun -and -not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+                $env:CLAUDE_CONFIG_DIR = $d
+                $rArgs = @('init', '-g', '--auto-patch', '--no-trust-filters'); if ($DryRun) { $rArgs += '--dry-run' }
+                # PS 5.1 with 'Stop' turns native stderr (rtk prints notices there) into a fatal error.
+                $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+                try { $o = $null | & rtk @rArgs 2>&1 | Out-String } finally { $ErrorActionPreference = $eap }
+                if ($LASTEXITCODE -ne 0) { throw "rtk init exit $LASTEXITCODE`: $(($o.Trim() -split "`n")[-1])" }
+                Update-ClaudeSettings $d {
+                    param($j)
+                    if (-not $j.PSObject.Properties['hooks'] -or -not $j.hooks.PSObject.Properties['PreToolUse']) { return }
+                    $seen = $false
+                    $keep = foreach ($e in @($j.hooks.PreToolUse)) {
+                        if (@($e.hooks | Where-Object { $_.command -eq 'rtk hook claude' }).Count -eq 0) { $e; continue }
+                        if ($seen) { continue }   # one rtk entry is enough
+                        $seen = $true
+                        if ($e.matcher -eq 'Bash') { $e.matcher = 'Bash|PowerShell' }
+                        $e
+                    }
+                    $j.hooks.PreToolUse = @($keep)
+                } 'RTK hook (Bash and PowerShell)'
+            } catch {
+                L "  [!!] RTK in ${d}: $($_.Exception.Message)"
+                $script:fail += "rtk:$d"
+            }
+        }
+        $env:CLAUDE_CONFIG_DIR = $prevCfg
     }
 }
 

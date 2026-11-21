@@ -1,5 +1,25 @@
 # Changelog
 
+## 7.5 - 2026-11-21
+
+### Added
+- **RTK** in **claude code config** (`-NoRtk` in `claude\Set-VortermClaude.ps1` to leave it out):
+  the engine installs `rtk` and `ripgrep`; Vorterm registers RTK's hook in `~\.claude` and
+  `~\.claude2` for **Bash and PowerShell** (rtk alone registers Bash only), keeps one entry however
+  many times it runs, and writes `%APPDATA%\rtk\config.toml` (telemetry off; `grep` and `curl` not
+  rewritten, because their filters change what the next command in a pipe receives) only if there
+  is none. Shell output is trimmed before it reaches the context; `rtk gain` shows the savings.
+
+### Changed
+- The essentials stack is leaner, after measuring real use: `superpowers`, `commit-commands`,
+  `pr-review-toolkit`, `claude-security`, `claude-code-setup` and `session-report` are no longer
+  installed (zero uses, context on every turn; `superpowers` also pushes questions before acting).
+  `microsoft-docs` is added. Machines set up with 7.4 keep them; to drop them:
+  `claude plugin uninstall <name>`.
+
+### Fixed
+- The engine report no longer lists an empty manual step.
+
 ## 7.4 - 2026-11-12
 
 ### Added
