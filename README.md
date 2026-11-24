@@ -1,111 +1,53 @@
-<table align="center">
-<tr>
-<td width="340" align="center">
-<img width="300" alt="Vorterm logo" src="https://github.com/user-attachments/assets/a982c6b2-9dc2-4f65-a131-98291bb14226" />
-</td>
-<td valign="middle">
+<div align="center">
 
-### VORTERM 7.5
+<img width="220" alt="Vorterm" src="https://github.com/user-attachments/assets/a982c6b2-9dc2-4f65-a131-98291bb14226" />
 
-**From clean Windows to modern dev shell**
-*one click*
+# VORTERM 7.5
 
-![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207.x-5391FE?logo=powershell&logoColor=white)
-![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)
-![winget](https://img.shields.io/badge/winget-silent-FCEE0A?logoColor=black)
-![license](https://img.shields.io/badge/license-MIT-1a1a1a)
+From clean Windows to a modern dev shell. One command.
 
-[Install](#-install) · [Stack](#-stack) · [Multi-pane](#-multi-pane) · [Session restore](#️-session-restore) · [Claude Code config](#-claude-code-config) · [Lab](#-lab-optional) · [Claude Code](#-claude-code-companion) · [Reset](#-reset)
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-1f1f1f?style=flat-square&logo=powershell&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-1f1f1f?style=flat-square) ![winget](https://img.shields.io/badge/winget-silent-FCEE0A?style=flat-square) ![MIT](https://img.shields.io/badge/license-MIT-1f1f1f?style=flat-square)
 
-</td>
-</tr>
-</table>
+<img src="assets/terminal.png" alt="PowerShell 7 with oh-my-posh and Nerd Font" width="820"/>
 
----
+</div>
 
-## ⚡ Install
-
-One command in PowerShell: downloads the latest Vorterm and opens it. Nothing is installed until you press **INSTALL**.
+## <img src="https://api.iconify.design/lucide/download.svg?color=%238b949e" width="18" align="top"> Install
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force; [Net.ServicePointManager]::SecurityProtocol=3072; $f="$env:TEMP\vorterm-bootstrap.ps1"; irm https://raw.githubusercontent.com/4leX-42/Vorterm/main/bootstrap.ps1 -OutFile $f; & $f
 ```
 
-Or download the repository and double-click:
+Nothing changes until **INSTALL**. Idempotent: re-running leaves what is already in place. Or `INSTALAR.bat` from the repo.
 
-```bat
-INSTALAR.bat
-```
+## <img src="https://api.iconify.design/lucide/package.svg?color=%238b949e" width="18" align="top"> Stack
 
-Re-running either is safe: anything already in place is left alone.
+| | |
+|---|---|
+| <img src="https://api.iconify.design/lucide/terminal.svg?color=%238b949e" width="18" align="top"> **Core** | PowerShell 7 · Windows Terminal · Git |
+| <img src="https://api.iconify.design/lucide/sparkles.svg?color=%238b949e" width="18" align="top"> **Shell** | oh-my-posh (bundled theme, offline) · JetBrainsMono Nerd Font · PSReadLine · Terminal-Icons · posh-git |
+| <img src="https://api.iconify.design/lucide/layers.svg?color=%238b949e" width="18" align="top"> **Optional** | VS Code · Neovim · 7-Zip · GitHub Desktop · WSL · Node.js LTS · Claude Code · Codex CLI · Antigravity |
+| <img src="https://api.iconify.design/lucide/columns-3.svg?color=%238b949e" width="18" align="top"> **Multi-pane** | `m2` `m3` `m4` · `-Rows` · `-Claude` · `close 2` · `/commands` |
+| <img src="https://api.iconify.design/lucide/history.svg?color=%238b949e" width="18" align="top"> **Session restore** | Tabs, panes, folders and Claude Code sessions come back after a reboot or crash |
+| <img src="https://api.iconify.design/lucide/rotate-ccw.svg?color=%238b949e" width="18" align="top"> **Reset** | Removes only what Vorterm added; your profile lines and LAB folder stay |
 
-Unattended (no window), for new machines or scripts:
+Your PowerShell profile is kept: Vorterm only manages the block between `# >>> vorterm >>>` and `# <<< vorterm <<<`.
+
+<details>
+<summary><img src="https://api.iconify.design/lucide/settings-2.svg?color=%238b949e" width="18" align="top"> <b>Unattended</b></summary>
 
 ```powershell
 powershell -ExecutionPolicy Bypass -STA -File .\setup_terminal.ps1 -NoGui
 powershell -ExecutionPolicy Bypass -STA -File .\setup_terminal.ps1 -NoGui -Node -ClaudeCode -LabRoot "$env:USERPROFILE\Desktop"
 ```
 
-Full options, updates and recovery: [docs/INSTALL.md](docs/INSTALL.md).
+Options, updates and recovery: [docs/INSTALL.md](docs/INSTALL.md).
+</details>
 
-<br/>
+<details>
+<summary><img src="https://api.iconify.design/lucide/columns-3.svg?color=%238b949e" width="18" align="top"> <b>Multi-pane and session restore</b></summary>
 
-<div align="center">
-  <img src="assets/terminal.png" alt="PowerShell 7 with oh-my-posh + Nerd Font" width="880"/>
-  <br/>
-  <sub><i>PowerShell 7 · oh-my-posh · Nerd Font · Terminal-Icons</i></sub>
-</div>
-
-<br/>
-
----
-
-## 📦 Stack
-
-> Silent · sequential &amp; retry-safe · winget-powered · idempotent
-
-<table align="center">
-<tr>
-<td valign="top" width="50%">
-
-**Core**
-
-<sub>
-PowerShell 7<br/>
-Windows Terminal<br/>
-Git
-</sub>
-
-</td>
-<td valign="top" width="50%">
-
-**Shell experience**
-
-<sub>
-oh-my-posh + <code>Mainthema</code> (bundled, offline)<br/>
-JetBrainsMono Nerd Font<br/>
-PSReadLine · Terminal-Icons · posh-git
-</sub>
-
-</td>
-</tr>
-</table>
-
-Your PowerShell profile keeps everything you wrote: Vorterm only manages its own block
-between `# >>> vorterm >>>` and `# <<< vorterm <<<`.
-
----
-
-## 🧩 Optional
-
-`VS Code` · `Neovim` · `7-Zip` · `GitHub Desktop` · `WSL` · `Node.js LTS` · `Claude Code` · `Codex CLI` · `Antigravity`
-
----
-
-## 🪟 Multi-pane
-
-One Windows Terminal window, several panes of a hidden black profile (no background image,
-so text stays readable). On by default.
+One Windows Terminal window, several panes of a hidden black profile. On by default.
 
 | Command | What it does |
 | :-- | :-- |
@@ -116,92 +58,42 @@ so text stays readable). On by default.
 | `/commands` | cheat sheet in the terminal |
 | `Ctrl+Shift+3 / B / Z` | split in 3 · type in all panes · zoom pane (only if the keys were free) |
 
----
+After a reboot, crash or forced close, each pane goes back to its folder and resumes its Claude Code session (`claude --resume <id>`, also in `~\.claude2`). `/exit` clears the record: only interrupted sessions come back. Claude Code hooks are added only to existing profiles; your own hooks stay.
+</details>
 
-## ♻️ Session restore
+<details>
+<summary><img src="https://api.iconify.design/lucide/bot.svg?color=%238b949e" width="18" align="top"> <b>Claude Code config</b></summary>
 
-After a reboot, a crash or a forced close, Windows Terminal reopens its tabs and panes,
-each one goes back to its folder and resumes the Claude Code session it had open
-(`claude --resume <id>`, also for a second profile in `~\.claude2`). On by default.
-
-- Opening Windows Terminal while a window is open adds a tab there instead of a new window.
-- Leaving Claude on purpose (`/exit`) clears the record: only interrupted sessions come back.
-- Claude Code hooks are added only to profiles that already exist; your own hooks stay.
-- `m2 -Claude` panes that come back resume their session instead of starting a new one.
-
----
-
-## 🧪 Lab (optional)
-
-Tick **lab**, choose a folder, and Vorterm creates `<folder>\LAB`: a
-ready-to-use working structure for Azure, Microsoft 365, Outlook/Exchange, Intune,
-security, Power Automate, CloudOps, PowerShell and DevOps work, with a `CLAUDE.md`,
-area rules, templates (runbook, change plan, incident, postmortem, project, script, KQL)
-and fictitious examples.
-
-- Local files only: no admin, no sign-in, no connection to Azure or Microsoft 365.
-- Never overwrites your files; re-running adds what is missing and refreshes only files
-  you have not edited. An existing folder that Vorterm did not create is never touched
-  unless you choose to add the missing files.
-- Also works on its own: `lab\New-VortermLab.ps1 -Root D:\Work`.
-
-Details: [docs/LAB.md](docs/LAB.md).
-
----
-
-## 🤖 Claude Code config
-
-Tick **claude code config** and Vorterm sets up Claude Code completely (it also ticks
-**claude code** and **node.js lts**):
+Tick **claude code config** (also ticks **claude code** and **node.js lts**):
 
 | | |
 | :-- | :-- |
-| Permissions | `bypassPermissions` as the default mode and no start-up warning, in `~\.claude` and `~\.claude2`, enforced again on every install; deny rules for `.env`, SSH keys, certificates and cloud credentials |
-| Plugins | security-guidance, feature-dev, claude-md-management, microsoft-docs, frontend-design. Kept lean on purpose: plugins that were never used in practice only cost context on every turn |
-| MCP and tools | codebase-memory-mcp (code graph), context7 (library docs), agent-browser, gitleaks, ripgrep |
-| Output trimming | [RTK](https://github.com/rtk-ai/rtk): a hook rewrites shell commands (Bash and PowerShell) to `rtk <command>`, which drops progress bars and boilerplate before the output reaches the context. `grep` and `curl` are left alone; `rtk gain` shows what it saved |
-| Second profile | `claude2` (second account in `~\.claude2`, same stack) |
+| Permissions | `bypassPermissions` by default, no start-up warning, in `~\.claude` and `~\.claude2`; deny rules for `.env`, SSH keys, certificates and cloud credentials |
+| Plugins | security-guidance, feature-dev, claude-md-management, microsoft-docs, frontend-design |
+| MCP and tools | codebase-memory-mcp, context7, agent-browser, gitleaks, ripgrep |
+| Output trimming | [RTK](https://github.com/rtk-ai/rtk) hook rewrites shell commands to `rtk <command>`; `grep` and `curl` left alone |
+| Second profile | `claude2` (`~\.claude2`, same stack) |
 | Status line | 5-hour / weekly usage and context percent, only if you have none |
-| Workspace | `Documents\claude-lab`: `CLAUDE.md` with working rules, `proyectos\_plantilla`, `scripts`, `docs\lecciones`, `privado` and `_archivo` kept out of git. Existing files are never overwritten |
+| Workspace | `Documents\claude-lab` with `CLAUDE.md`, templates and git-ignored `privado` / `_archivo` |
 
-> **Warning:** with `bypassPermissions` Claude runs commands and edits files without asking,
-> including whatever a plugin or a prompt injection hidden in a web page or a repository tells it
-> to do. The deny rules still apply. Untick the option if you want permission prompts; an
-> organisation policy (`disableBypassPermissionsMode`) overrides it.
+> **Warning:** with `bypassPermissions` Claude runs commands and edits files without asking, including what a plugin or a prompt injection in a page or repo tells it to do. Deny rules still apply. Untick to keep permission prompts; the `disableBypassPermissionsMode` policy overrides it.
 
-Plugins and MCP servers come from the [Claude Code Setup Guide](https://github.com/4leX-42/ClaudeCode_SETUP)
-engine (`profiles/essentials.json`). On its own: `claude\Set-VortermClaude.ps1`.
+Engine: [Claude Code Setup Guide](https://github.com/4leX-42/ClaudeCode_SETUP) (`profiles/essentials.json`). Standalone: `claude\Set-VortermClaude.ps1`.
+</details>
 
----
+<details>
+<summary><img src="https://api.iconify.design/lucide/flask-conical.svg?color=%238b949e" width="18" align="top"> <b>Lab</b></summary>
 
-## 🤖 Claude Code companion
+Tick **lab** and pick a folder: Vorterm creates `<folder>\LAB`, a working structure for Azure, Microsoft 365, Exchange, Intune, security, Power Automate, CloudOps, PowerShell and DevOps, with `CLAUDE.md`, area rules, templates (runbook, change plan, incident, postmortem, project, script, KQL) and fictitious examples. Local files only, never overwrites your edits. Standalone: `lab\New-VortermLab.ps1 -Root D:\Work`. Details: [docs/LAB.md](docs/LAB.md).
+</details>
 
-**[Claude Code Setup Guide](https://github.com/4leX-42/ClaudeCode_SETUP)** is the
-official complement: Vorterm prepares the terminal (shell, fonts, Git, Node.js, execution
-policy, profile); the Setup Guide configures Claude Code on top of it (plugins, MCP
-servers, permissions, status line, second profile).
+<details>
+<summary><img src="https://api.iconify.design/lucide/rotate-ccw.svg?color=%238b949e" width="18" align="top"> <b>Reset</b></summary>
 
-1. Vorterm (tick **node.js lts** and, if you like, **claude code**).
-2. Claude Code Setup Guide: `pwsh -File install.ps1`.
-
-Each works on its own; together they never edit the same lines (the Setup Guide writes
-its own marked block in the profile, outside Vorterm's).
-
----
-
-## 🔄 Reset
-
-One click. Removes only what Vorterm added: its profile block (your own lines stay), the
-user copies of its modules, the Mosaic profile and its shortcuts, the session restore
-scripts and hooks, and returns Windows Terminal settings to the state before Vorterm. A `.before-reset-*` copy is kept every time.
-Claude Code config (permissions, plugins, `claude-lab`) is kept.
-Your LAB folder is never touched.
-
----
+Removes its profile block, module copies, the Mosaic profile and shortcuts, session restore scripts and hooks, and returns Windows Terminal settings to their previous state (a `.before-reset-*` copy is kept). Claude Code config and the LAB folder are kept.
+</details>
 
 <div align="center">
-
-**Build · Ship · Forget**
 
 <sub>MIT © Vorterm · [Changelog](CHANGELOG.md)</sub>
 
